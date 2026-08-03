@@ -1,0 +1,492 @@
+{
+  "87": {
+    "inputs": {
+      "text_input": [
+        "303",
+        0
+      ],
+      "task": "caption_to_phrase_grounding",
+      "fill_mask": false,
+      "keep_model_loaded": true,
+      "max_new_tokens": 1024,
+      "num_beams": 1,
+      "do_sample": true,
+      "output_mask_select": "",
+      "seed": 70331,
+      "image": [
+        "330",
+        0
+      ],
+      "florence2_model": [
+        "88",
+        0
+      ]
+    },
+    "class_type": "Florence2Run",
+    "_meta": {
+      "title": "Florence2Run"
+    }
+  },
+  "88": {
+    "inputs": {
+      "model": "microsoft/Florence-2-large",
+      "precision": "fp16",
+      "attention": "sdpa",
+      "convert_to_safetensors": false
+    },
+    "class_type": "DownloadAndLoadFlorence2Model",
+    "_meta": {
+      "title": "DownloadAndLoadFlorence2Model"
+    }
+  },
+  "255": {
+    "inputs": {
+      "index": "",
+      "batch": true,
+      "data": [
+        "87",
+        3
+      ]
+    },
+    "class_type": "Florence2toCoordinates",
+    "_meta": {
+      "title": "Florence2 Coordinates"
+    }
+  },
+  "270": {
+    "inputs": {
+      "model": "sam2_hiera_base_plus.safetensors",
+      "segmentor": "single_image",
+      "device": "cuda",
+      "precision": "fp32"
+    },
+    "class_type": "DownloadAndLoadSAM2Model",
+    "_meta": {
+      "title": "(Down)Load SAM2Model"
+    }
+  },
+  "303": {
+    "inputs": {
+      "text": "rod"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Florence prompt"
+    }
+  },
+  "318": {
+    "inputs": {
+      "separator": "_",
+      "text2": [
+        "319",
+        0
+      ]
+    },
+    "class_type": "CR Text Concatenate",
+    "_meta": {
+      "title": "Text prompt prefix"
+    }
+  },
+  "319": {
+    "inputs": {
+      "text": "Florence"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Text Prompt (JPS)"
+    }
+  },
+  "320": {
+    "inputs": {
+      "filename_prefix": [
+        "318",
+        0
+      ],
+      "images": [
+        "87",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "325": {
+    "inputs": {
+      "context_scale": 2.0000000000000004,
+      "force_square_context": true,
+      "limit_tile_size": false,
+      "max_tile_size": 1024,
+      "mask_filter_mode": "disabled",
+      "min_mask_area": 70,
+      "min_mask_area_percent": 0.020000000000000004,
+      "fill_individual_masks": false,
+      "close_mask_gaps": 0,
+      "dilate_masks": 0,
+      "keep_model_loaded": true,
+      "mask_opacity": 0.5,
+      "individual_objects": false,
+      "sam2_model": [
+        "270",
+        0
+      ],
+      "image": [
+        "330",
+        0
+      ],
+      "bboxes": [
+        "373",
+        0
+      ]
+    },
+    "class_type": "Sam2ContextSegmentation",
+    "_meta": {
+      "title": "Sam2ContextSegmentation"
+    }
+  },
+  "330": {
+    "inputs": {
+      "image": "bench-press.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Image"
+    }
+  },
+  "365": {
+    "inputs": {
+      "mask": [
+        "325",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Convert Mask to Image"
+    }
+  },
+  "373": {
+    "inputs": {
+      "index": 1,
+      "bboxes": [
+        "255",
+        1
+      ]
+    },
+    "class_type": "SplitBboxes",
+    "_meta": {
+      "title": "Split Bboxes"
+    }
+  },
+  "385": {
+    "inputs": {
+      "text": "ObjectMask"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Text Prompt (JPS)"
+    }
+  },
+  "386": {
+    "inputs": {
+      "separator": "_",
+      "text1": [
+        "385",
+        0
+      ]
+    },
+    "class_type": "CR Text Concatenate",
+    "_meta": {
+      "title": "Text prompt prefix"
+    }
+  },
+  "387": {
+    "inputs": {
+      "filename_prefix": [
+        "386",
+        0
+      ],
+      "images": [
+        "365",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "400": {
+    "inputs": {
+      "text": "CannyImage\n"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Text Prompt (JPS)"
+    }
+  },
+  "401": {
+    "inputs": {
+      "separator": "_",
+      "text1": [
+        "400",
+        0
+      ]
+    },
+    "class_type": "CR Text Concatenate",
+    "_meta": {
+      "title": "Text prompt prefix"
+    }
+  },
+  "402": {
+    "inputs": {
+      "filename_prefix": [
+        "401",
+        0
+      ],
+      "images": [
+        "423",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "410": {
+    "inputs": {
+      "channel": "red",
+      "image": [
+        "423",
+        0
+      ]
+    },
+    "class_type": "ImageToMask",
+    "_meta": {
+      "title": "Convert Image to Mask"
+    }
+  },
+  "411": {
+    "inputs": {
+      "iterations": 3,
+      "masks": [
+        "410",
+        0
+      ]
+    },
+    "class_type": "Mask Dilate Region",
+    "_meta": {
+      "title": "Mask Dilate Region"
+    }
+  },
+  "412": {
+    "inputs": {
+      "mask": [
+        "411",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Convert Mask to Image"
+    }
+  },
+  "415": {
+    "inputs": {
+      "x": 0,
+      "y": 0,
+      "resize_source": false,
+      "destination": [
+        "426",
+        0
+      ],
+      "source": [
+        "412",
+        0
+      ],
+      "mask": [
+        "411",
+        0
+      ]
+    },
+    "class_type": "ImageCompositeMasked",
+    "_meta": {
+      "title": "ImageCompositeMasked"
+    }
+  },
+  "417": {
+    "inputs": {
+      "filename_prefix": [
+        "418",
+        0
+      ],
+      "images": [
+        "415",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  },
+  "418": {
+    "inputs": {
+      "separator": "_",
+      "text2": [
+        "419",
+        0
+      ]
+    },
+    "class_type": "CR Text Concatenate",
+    "_meta": {
+      "title": "Text prompt prefix"
+    }
+  },
+  "419": {
+    "inputs": {
+      "text": "Object_Skeleton_added"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Text Prompt (JPS)"
+    }
+  },
+  "421": {
+    "inputs": {
+      "mask": [
+        "325",
+        0
+      ]
+    },
+    "class_type": "MaskToImage",
+    "_meta": {
+      "title": "Convert Mask to Image"
+    }
+  },
+  "423": {
+    "inputs": {
+      "mode": "normal",
+      "image": [
+        "421",
+        0
+      ]
+    },
+    "class_type": "Image Edge Detection Filter",
+    "_meta": {
+      "title": "Image Edge Detection Filter"
+    }
+  },
+  "424": {
+    "inputs": {
+      "low_threshold": 100,
+      "high_threshold": 255,
+      "resolution": 512,
+      "image": [
+        "421",
+        0
+      ]
+    },
+    "class_type": "CannyEdgePreprocessor",
+    "_meta": {
+      "title": "Canny Edge"
+    }
+  },
+  "426": {
+    "inputs": {
+      "width": [
+        "428",
+        0
+      ],
+      "height": [
+        "428",
+        1
+      ],
+      "upscale_method": "nearest-exact",
+      "keep_proportion": "pad_edge",
+      "pad_color": "0, 0, 0",
+      "crop_position": "top",
+      "divisible_by": 2,
+      "device": "gpu",
+      "image": [
+        "427",
+        0
+      ]
+    },
+    "class_type": "ImageResizeKJv2",
+    "_meta": {
+      "title": "Resize Image v2"
+    }
+  },
+  "427": {
+    "inputs": {
+      "detect_hand": "enable",
+      "detect_body": "enable",
+      "detect_face": "enable",
+      "resolution": 1024,
+      "bbox_detector": "yolo_nas_l_fp16.onnx",
+      "pose_estimator": "dw-ll_ucoco_384_bs5.torchscript.pt",
+      "scale_stick_for_xinsr_cn": "disable",
+      "image": [
+        "330",
+        0
+      ]
+    },
+    "class_type": "DWPreprocessor",
+    "_meta": {
+      "title": "DWPose Estimator"
+    }
+  },
+  "428": {
+    "inputs": {
+      "image": [
+        "330",
+        0
+      ]
+    },
+    "class_type": "GetImageSize",
+    "_meta": {
+      "title": "Get Image Size"
+    }
+  },
+  "437": {
+    "inputs": {
+      "text": "SkeletonImage\n"
+    },
+    "class_type": "Text Prompt (JPS)",
+    "_meta": {
+      "title": "Text Prompt (JPS)"
+    }
+  },
+  "438": {
+    "inputs": {
+      "separator": "_",
+      "text2": [
+        "437",
+        0
+      ]
+    },
+    "class_type": "CR Text Concatenate",
+    "_meta": {
+      "title": "Text prompt prefix"
+    }
+  },
+  "439": {
+    "inputs": {
+      "filename_prefix": [
+        "438",
+        0
+      ],
+      "images": [
+        "426",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    }
+  }
+}
