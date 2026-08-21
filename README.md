@@ -241,14 +241,6 @@ python backend/scripts/convert_lightgbm_to_onnx.py \
 python backend/scripts/convert_lightgbm_to_onnx.py --create_sample --output_dir ./models --n_features 156
 ```
 
-## Performance Benchmarks
-
-Run benchmarks locally:
-
-```bash
-cd benchmarks
-python benchmark_analysis.py --num_runs 50 --video_path ../sample_video.mp4
-```
 
 ### Target Metrics (on RTX 3080 / Intel i7-12700K)
 
