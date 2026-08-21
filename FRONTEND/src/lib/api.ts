@@ -5,6 +5,7 @@ const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://independently-una
 const ANALYZE_MOVEMENT_URL = import.meta.env.VITE_ANALYZE_MOVEMENT_URL || `${BASE_URL}/analyze_movement`;
 const ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER = import.meta.env.VITE_ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER || `${BASE_URL}/analyze_without_video`;
 const GENERATE_IMAGE_URL = import.meta.env.VITE_GENERATE_IMAGE_URL || "https://ankushraj2024--maskedbar-pipeline-full-imagepipeline-web-4b6c7d.modal.run";
+const POSE_TRANSFER_URL = import.meta.env.VITE_POSE_TRANSFER_URL || `${BASE_URL}/api/v1/generate/pose-transfer`;
 const LOGIN_URL = import.meta.env.VITE_LOGIN_URL || `${BASE_URL}/login`;
 const SIGNUP_URL = import.meta.env.VITE_SIGNUP_URL || `${BASE_URL}/signup`;
 const CHAT_URL = import.meta.env.VITE_CHAT_URL || `${BASE_URL}/chat`;
@@ -123,5 +124,30 @@ export async function sendChatMessage(message: string) {
   return response.data;
 }
 
-export { CHAT_URL, LOGIN_URL, SIGNUP_URL };
+export async function generatePoseTransfer(
+  userImage: File,
+  trainerImage: File,
+  exerciseName: string,
+  frameId: number
+): Promise<Blob> {
+  const formData = new FormData();
+  formData.append("user_image", userImage);
+  formData.append("trainer_image", trainerImage);
+  formData.append("exercise_name", exerciseName);
+  formData.append("frame_id", frameId.toString());
+
+  if (!POSE_TRANSFER_URL) {
+    throw new Error("Pose Transfer URL is not configured");
+  }
+
+  const response = await api.post(POSE_TRANSFER_URL, formData, {
+    headers: { "Content-Type": "multipart/form-data" },
+    responseType: "blob",
+    timeout: 180000,
+  });
+
+  return response.data;
+}
+
+export { CHAT_URL, LOGIN_URL, SIGNUP_URL, POSE_TRANSFER_URL };
 export default api;

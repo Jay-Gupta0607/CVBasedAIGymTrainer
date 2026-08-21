@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, RotateCcw, Play, Loader2, ChevronDown } from "lucide-react";
+import { Activity, RotateCcw, Play, Loader2, ChevronDown, Image as ImageIcon } from "lucide-react";
 import VideoUploader from "@/components/shared/VideoUploader";
+import ImageUploader from "@/components/shared/ImageUploader";
 import FrameCard from "@/components/shared/FrameCard";
 import { analyzeMovement, analyzeMovementWithoutTrainer, type AnalysisResponse} from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -52,6 +53,8 @@ const exercises = [
 export default function AnalyzeMovement() {
   const [trainerVideo, setTrainerVideo] = useState<File | null>(null);
   const [userVideo, setUserVideo] = useState<File | null>(null);
+  const [trainerReferenceImage, setTrainerReferenceImage] = useState<File | null>(null);
+  const [trainerReferenceImageUrl, setTrainerReferenceImageUrl] = useState<string | null>(null);
   const [exerciseName, setExerciseName] = useState("");
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -113,6 +116,11 @@ export default function AnalyzeMovement() {
   const handleReset = () => {
     setTrainerVideo(null);
     setUserVideo(null);
+    if (trainerReferenceImageUrl) {
+      URL.revokeObjectURL(trainerReferenceImageUrl);
+    }
+    setTrainerReferenceImage(null);
+    setTrainerReferenceImageUrl(null);
     setExerciseName("");
     setResult(null);
     setUploadProgress(0);
@@ -215,6 +223,30 @@ export default function AnalyzeMovement() {
               </Popover>
             </div>
 
+            {/* Trainer Reference Image for Pose Transfer */}
+            <div className="mb-6">
+              <label className="text-sm font-medium text-gray-200 mb-2 block flex items-center gap-2">
+                <ImageIcon className="w-4 h-4 text-primary" />
+                Trainer Reference Image (for Pose Transfer)
+              </label>
+              <ImageUploader
+                label=""
+                file={trainerReferenceImage}
+                onFileChange={(file) => {
+                  setTrainerReferenceImage(file);
+                  if (trainerReferenceImageUrl) {
+                    URL.revokeObjectURL(trainerReferenceImageUrl);
+                  }
+                  if (file) {
+                    setTrainerReferenceImageUrl(URL.createObjectURL(file));
+                  } else {
+                    setTrainerReferenceImageUrl(null);
+                  }
+                }}
+              />
+              <p className="text-xs text-gray-500 mt-1">Optional: Used to preserve trainer's clothing/style in pose transfer</p>
+            </div>
+
             <div className="flex flex-wrap gap-3">
               {/*  */}
               <button
@@ -312,7 +344,13 @@ export default function AnalyzeMovement() {
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {result.analysis?.map((frame, i) => (
-                    <FrameCard key={frame.frame_id} frame={frame} index={i} />
+                    <FrameCard
+                      key={frame.frame_id}
+                      frame={frame}
+                      index={i}
+                      exerciseName={exerciseName}
+                      trainerReferenceImage={trainerReferenceImageUrl || undefined}
+                    />
                   ))}
                 </div>
               </motion.div>

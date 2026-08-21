@@ -1,13 +1,16 @@
-import { motion } from "framer-motion";
-import { Expand, AlertTriangle } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Expand, AlertTriangle, Sparkles } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import ScoreGauge from "./ScoreGauge";
+import PoseTransferButton from "./PoseTransferButton";
 import type { AnalysisFrame } from "@/lib/api";
 import { useState } from "react";
 
 interface FrameCardProps {
   frame: AnalysisFrame;
   index: number;
+  exerciseName: string;
+  trainerReferenceImage?: string; // base64 trainer reference for pose transfer
 }
 
 export default function FrameCard({ frame, index }: FrameCardProps) {
@@ -67,6 +70,16 @@ export default function FrameCard({ frame, index }: FrameCardProps) {
           <div className="text-xs text-muted-foreground leading-relaxed prose prose-xs prose-invert max-w-none [&>p]:m-0">
             <ReactMarkdown>{frame.technical_observation}</ReactMarkdown>
           </div>
+        </div>
+
+        {/* Pose Transfer Button */}
+        <div className="mt-4">
+          <PoseTransferButton
+            userImage={frame.user_image}
+            trainerImage={trainerReferenceImage}
+            exerciseName={exerciseName}
+            frameId={frame.frame_id}
+          />
         </div>
       </motion.div>
 

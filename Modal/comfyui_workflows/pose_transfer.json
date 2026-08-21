@@ -1,0 +1,245 @@
+{
+  "1": {
+    "inputs": {
+      "image": "user_image.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load User Image (Identity)"
+    }
+  },
+  "2": {
+    "inputs": {
+      "image": "trainer_image.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Trainer Image (Style)"
+    }
+  },
+  "3": {
+    "inputs": {
+      "image": "control_image.jpg"
+    },
+    "class_type": "LoadImage",
+    "_meta": {
+      "title": "Load Control Image (DWPOse)"
+    }
+  },
+  "10": {
+    "inputs": {
+      "unet_name": "flux1-dev-Q4_0.gguf"
+    },
+    "class_type": "UnetLoaderGGUF",
+    "_meta": {
+      "title": "Load Flux Model (GGUF)"
+    }
+  },
+  "11": {
+    "inputs": {
+      "vae_name": "ae.safetensors"
+    },
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Load Flux VAE"
+    }
+  },
+  "12": {
+    "inputs": {
+      "clip_name1": "clip_l.safetensors",
+      "clip_name2": "t5xxl_fp16.safetensors"
+    },
+    "class_type": "DualCLIPLoader",
+    "_meta": {
+      "title": "Load Flux CLIP"
+    }
+  },
+  "20": {
+    "inputs": {
+      "control_net_name": "controlnet-dwpose-flux.safetensors"
+    },
+    "class_type": "ControlNetLoader",
+    "_meta": {
+      "title": "Load ControlNet DWPOse"
+    }
+  },
+  "21": {
+    "inputs": {
+      "model": "instantid.bin",
+      "face_encoder": "google/siglip-so400m-patch14-384",
+      "provider": "CUDAExecutionProvider"
+    },
+    "class_type": "InstantIDLoader",
+    "_meta": {
+      "title": "Load InstantID"
+    }
+  },
+  "22": {
+    "inputs": {
+      "model": "ip-adapter-plus_sd15.bin",
+      "image_encoder": "clip_vit_h_14.safetensors"
+    },
+    "class_type": "IPAdapterPlusLoader",
+    "_meta": {
+      "title": "Load IP-Adapter Plus"
+    }
+  },
+  "30": {
+    "inputs": {
+      "text": "professional fitness photo, perfect form, gym lighting, high quality, sharp focus, 8k"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive Prompt"
+    }
+  },
+  "31": {
+    "inputs": {
+      "text": "blurry, low quality, distorted, deformed, ugly, bad anatomy, extra limbs, watermark, text"
+    },
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Negative Prompt"
+    }
+  },
+  "40": {
+    "inputs": {
+      "strength": 0.8,
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "control_net": [
+        "20",
+        0
+      ],
+      "image": [
+        "3",
+        0
+      ]
+    },
+    "class_type": "ControlNetApplyAdvanced",
+    "_meta": {
+      "title": "Apply ControlNet (DWPOse)"
+    }
+  },
+  "41": {
+    "inputs": {
+      "instantid": [
+        "21",
+        0
+      ],
+      "image": [
+        "1",
+        0
+      ],
+      "strength": 0.8,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    },
+    "class_type": "InstantIDApply",
+    "_meta": {
+      "title": "Apply InstantID (Face Identity)"
+    }
+  },
+  "42": {
+    "inputs": {
+      "ipadapter": [
+        "22",
+        0
+      ],
+      "image": [
+        "2",
+        0
+      ],
+      "weight": 0.6,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    },
+    "class_type": "IPAdapterPlusApply",
+    "_meta": {
+      "title": "Apply IP-Adapter Plus (Style/Clothing)"
+    }
+  },
+  "50": {
+    "inputs": {
+      "guidance": 3.5,
+      "conditioning": [
+        "30",
+        0
+      ]
+    },
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "Flux Guidance"
+    }
+  },
+  "51": {
+    "inputs": {
+      "seed": 42,
+      "steps": 20,
+      "cfg": 1.0,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0,
+      "model": [
+        "10",
+        0
+      ],
+      "positive": [
+        "50",
+        0
+      ],
+      "negative": [
+        "31",
+        0
+      ],
+      "latent_image": [
+        "60",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "KSampler (Flux)"
+    }
+  },
+  "60": {
+    "inputs": {
+      "width": 512,
+      "height": 512,
+      "batch_size": 1
+    },
+    "class_type": "EmptySD3LatentImage",
+    "_meta": {
+      "title": "Empty Latent (Flux)"
+    }
+  },
+  "70": {
+    "inputs": {
+      "samples": [
+        "51",
+        0
+      ],
+      "vae": [
+        "11",
+        0
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "80": {
+    "inputs": {
+      "filename_prefix": "pose_transfer",
+      "images": [
+        "70",
+        0
+      ]
+    },
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Result"
+    }
+  }
+}

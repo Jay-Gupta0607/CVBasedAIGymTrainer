@@ -1,0 +1,7 @@
+# ML requirements - for model conversion/training (not in production image)
+-r base.txt
+
+mediapipe==0.10.14
+tf2onnx==1.16.1
+tensorflow==2.16.1
+torch==2.3.0

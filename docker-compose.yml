@@ -1,0 +1,175 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: gym-trainer-postgres
+    environment:
+      POSTGRES_DB: gym_trainer
+      POSTGRES_USER: trainer
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trainer_password}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trainer -d gym_trainer"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gym-trainer-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: gym-trainer-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - gym-trainer-network
+
+  minio:
+    image: minio/minio:latest
+    container_name: gym-trainer-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: ${MINIO_PASSWORD:-minio_password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - gym-trainer-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gym-trainer-backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trainer:${DB_PASSWORD:-trainer_password}@postgres:5432/gym_trainer
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: ${MINIO_PASSWORD:-minio_password}
+      S3_BUCKET: gym-trainer
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production-min-32-chars}
+      MODAL_API_KEY: ${MODAL_API_KEY}
+      MODAL_IMAGE_GEN_ENDPOINT: ${MODAL_IMAGE_GEN_ENDPOINT}
+      ENVIRONMENT: development
+      DEBUG: "true"
+      LOG_LEVEL: DEBUG
+      MODELS_DIR: /app/models
+      POSE_MODEL_PATH: /app/models/pose_landmarker.onnx
+      SCORER_MODEL_PATH: /app/models/form_scorer.onnx
+      ONNX_PROVIDERS: CPUExecutionProvider
+      TEMP_DIR: /tmp/gym_trainer
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./models:/app/models:ro
+      - temp_data:/tmp/gym_trainer
+    networks:
+      - gym-trainer-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  frontend:
+    build:
+      context: ./FRONTEND
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    container_name: gym-trainer-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    networks:
+      - gym-trainer-network
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: gym-trainer-worker
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      DATABASE_URL: postgresql+asyncpg://trainer:${DB_PASSWORD:-trainer_password}@postgres:5432/gym_trainer
+      REDIS_URL: redis://redis:6379/0
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: minioadmin
+      S3_SECRET_KEY: ${MINIO_PASSWORD:-minio_password}
+      S3_BUCKET: gym-trainer
+      S3_REGION: us-east-1
+      S3_USE_SSL: "false"
+      JWT_SECRET: ${JWT_SECRET:-your-super-secret-jwt-key-change-in-production-min-32-chars}
+      MODAL_API_KEY: ${MODAL_API_KEY}
+      MODAL_IMAGE_GEN_ENDPOINT: ${MODAL_IMAGE_GEN_ENDPOINT}
+      ENVIRONMENT: development
+      DEBUG: "true"
+      LOG_LEVEL: DEBUG
+      MODELS_DIR: /app/models
+      POSE_MODEL_PATH: /app/models/pose_landmarker.onnx
+      SCORER_MODEL_PATH: /app/models/form_scorer.onnx
+      ONNX_PROVIDERS: CPUExecutionProvider
+      TEMP_DIR: /tmp/gym_trainer
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./backend:/app
+      - ./models:/app/models:ro
+      - temp_data:/tmp/gym_trainer
+    networks:
+      - gym-trainer-network
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  temp_data:
+
+networks:
+  gym-trainer-network:
+    driver: bridge
