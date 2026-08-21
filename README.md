@@ -61,7 +61,7 @@
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/CVBasedAIGymTrainer.git
+git clone https://github.com/Jay-Gupta0607/CVBasedAIGymTrainer.git
 cd CVBasedAIGymTrainer
 
 # Create environment file
