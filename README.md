@@ -126,7 +126,7 @@ npm run dev
 
 ### Base URL
 - Local: `http://localhost:8000/api/v1`
-- Production: `https://api.yourdomain.com/api/v1`
+- Production: `TBD (Not deployed yet)`
 
 ### Endpoints
 
