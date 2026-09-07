@@ -49,7 +49,7 @@ export function usePoseTransfer() {
         });
 
         return transferResult;
-      } catch (err: any) {
+      } catch (err) {
         toast({
           title: "Generation failed",
           description: err?.message || "Could not generate pose transfer image.",

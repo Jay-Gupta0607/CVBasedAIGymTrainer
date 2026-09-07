@@ -1,17 +1,35 @@
 import axios from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || "https://independently-unapplauded-azzie.ngrok-free.dev";
+const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
-const ANALYZE_MOVEMENT_URL = import.meta.env.VITE_ANALYZE_MOVEMENT_URL || `${BASE_URL}/analyze_movement`;
-const ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER = import.meta.env.VITE_ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER || `${BASE_URL}/analyze_without_video`;
-const GENERATE_IMAGE_URL = import.meta.env.VITE_GENERATE_IMAGE_URL || "https://ankushraj2024--maskedbar-pipeline-full-imagepipeline-web-4b6c7d.modal.run";
+const ANALYZE_MOVEMENT_URL = import.meta.env.VITE_ANALYZE_MOVEMENT_URL || `${BASE_URL}/api/v1/analyze`;
+const ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER =
+  import.meta.env.VITE_ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER || `${BASE_URL}/api/v1/analyze/no-trainer`;
+const GENERATE_IMAGE_URL = import.meta.env.VITE_GENERATE_IMAGE_URL || `${BASE_URL}/api/v1/generate`;
 const POSE_TRANSFER_URL = import.meta.env.VITE_POSE_TRANSFER_URL || `${BASE_URL}/api/v1/generate/pose-transfer`;
-const LOGIN_URL = import.meta.env.VITE_LOGIN_URL || `${BASE_URL}/login`;
-const SIGNUP_URL = import.meta.env.VITE_SIGNUP_URL || `${BASE_URL}/signup`;
-const CHAT_URL = import.meta.env.VITE_CHAT_URL || `${BASE_URL}/chat`;
+const LOGIN_URL = import.meta.env.VITE_LOGIN_URL || `${BASE_URL}/api/v1/auth/login`;
+const SIGNUP_URL = import.meta.env.VITE_SIGNUP_URL || `${BASE_URL}/api/v1/auth/signup`;
+const CHAT_URL = import.meta.env.VITE_CHAT_URL || `${BASE_URL}/api/v1/chat`;
 
 const api = axios.create({
   timeout: 300000,
+});
+
+// Attach the JWT to every request when the user is logged in.
+const getToken = () => {
+  try {
+    return localStorage.getItem("access_token");
+  } catch {
+    return null;
+  }
+};
+
+api.interceptors.request.use((config) => {
+  const token = getToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 export interface AnalysisFrame {
@@ -25,15 +43,55 @@ export interface AnalysisFrame {
 
 export interface AnalysisResponse {
   analysis: AnalysisFrame[];
-
-  
-  reps: number,
+  reps: number;
   feedback_summary: string;
   technical_details: { title: string; description: string }[];
 }
 
 export interface GenerateImageResponse {
   corrected_image: string; // base64
+}
+
+interface TaskResponse {
+  task_id: string;
+  status: string;
+  message?: string;
+}
+
+interface StatusResponse {
+  task_id: string;
+  status: string;
+  progress: number;
+  current_stage?: string;
+  error_message?: string | null;
+  result?: AnalysisResponse | null;
+}
+
+/**
+ * Poll the FastAPI analysis status endpoint until the job completes.
+ * FastAPI's create endpoints return a task_id (202); results come from polling.
+ */
+async function pollAnalysis(
+  taskId: string,
+  onProgress?: (progress: number) => void
+): Promise<AnalysisResponse> {
+  for (;;) {
+    const response = await api.get<StatusResponse>(`${BASE_URL}/api/v1/analyze/${taskId}/status`);
+    const data = response.data;
+
+    if (onProgress) {
+      onProgress(data.progress ?? 0);
+    }
+
+    if (data.status === "completed" && data.result) {
+      return data.result;
+    }
+    if (data.status === "failed") {
+      throw new Error(data.error_message || "Analysis failed");
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
 }
 
 export async function analyzeMovement(
@@ -49,8 +107,7 @@ export async function analyzeMovement(
   formData.append("exercise_name", exerciseName);
   formData.append("email", email);
 
-  // Post directly to the function URL, no path appending
-  const response = await api.post<AnalysisResponse>(ANALYZE_MOVEMENT_URL, formData, {
+  const response = await api.post<TaskResponse>(ANALYZE_MOVEMENT_URL, formData, {
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: (e) => {
       if (e.total && onProgress) {
@@ -59,10 +116,9 @@ export async function analyzeMovement(
     },
   });
 
-  return response.data;
+  return pollAnalysis(response.data.task_id, onProgress);
 }
 
-// ---------- // 
 export async function analyzeMovementWithoutTrainer(
   userVideo: File,
   exerciseName: string,
@@ -74,8 +130,7 @@ export async function analyzeMovementWithoutTrainer(
   formData.append("exercise_name", exerciseName);
   formData.append("email", email);
 
-  // Post directly to the function URL, no path appending
-  const response = await api.post<AnalysisResponse>(ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER, formData, {
+  const response = await api.post<TaskResponse>(ANALYZE_MOVEMENT_URL_WITHOUT_TRAINER, formData, {
     headers: { "Content-Type": "multipart/form-data" },
     onUploadProgress: (e) => {
       if (e.total && onProgress) {
@@ -84,14 +139,10 @@ export async function analyzeMovementWithoutTrainer(
     },
   });
 
-  return response.data;
+  return pollAnalysis(response.data.task_id, onProgress);
 }
-// ----------- //
 
-export async function generateImage(
-  image: File,
-  prompt: string
-): Promise<Blob> {
+export async function generateImage(image: File, prompt: string): Promise<Blob> {
   const formData = new FormData();
   formData.append("image", image);
   formData.append("prompt", prompt);
@@ -100,7 +151,6 @@ export async function generateImage(
     throw new Error("Generate Image URL is not configured");
   }
 
-  // Post directly to the function URL
   const response = await api.post(GENERATE_IMAGE_URL, formData, {
     headers: { "Content-Type": "multipart/form-data" },
     responseType: "blob",
@@ -114,8 +164,8 @@ export async function loginUser(email: string, password: string) {
   return response.data;
 }
 
-export async function signupUser(email: string, password: string) {
-  const response = await api.post(SIGNUP_URL, { email, password });
+export async function signupUser(email: string, password: string, fullName?: string) {
+  const response = await api.post(SIGNUP_URL, { email, password, full_name: fullName });
   return response.data;
 }
 

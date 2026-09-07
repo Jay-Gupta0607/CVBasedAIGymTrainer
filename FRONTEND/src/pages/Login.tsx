@@ -21,10 +21,11 @@ export default function Login() {
     try {
       const data = await loginUser(email, password);
       localStorage.setItem("user", JSON.stringify({ email, ...data }));
+      localStorage.setItem("access_token", data.access_token);
       window.dispatchEvent(new Event("auth-change"));
       toast({ title: "Welcome back!", description: `Logged in as ${email}` });
       navigate("/");
-    } catch (err: any) {
+    } catch (err) {
       toast({ title: "Login failed", description: err?.response?.data?.detail || "Invalid credentials.", variant: "destructive" });
     } finally {
       setLoading(false);

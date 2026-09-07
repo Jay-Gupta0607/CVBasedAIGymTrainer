@@ -27,14 +27,10 @@ export default function GenerateImage() {
     }
     setLoading(true);
     try {
-      // Use a default prompt as requested/implied by removal of inputs. 
-      // User curl example used "rod", but "General" or similar is safer if "rod" isn't magic.
-      // I'll use "fix form" as a generic prompt to satisfy the requirement.
-      const blob = await generateImage(file, "rod");
+      const blob = await generateImage(file, "correct exercise form");
       const url = URL.createObjectURL(blob);
       setCorrectedImage(url);
-      // setShowCompare(false); // Removed as state is deleted
-    } catch (err: any) {
+    } catch (err) {
       toast({
         title: "Generation failed",
         description: err?.message || "Could not reach the backend.",

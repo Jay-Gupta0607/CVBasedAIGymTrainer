@@ -1,73 +1,45 @@
-# Welcome to your Lovable project
+# CVBasedAIGymTrainer — Frontend
 
-## Project info
+React 18 + TypeScript + Vite frontend for the CV-Based AI Gym Trainer. Talks to the FastAPI backend
+(see the root [README](../README.md)).
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Tech
 
-## How can I edit this code?
+- **React 18** + TypeScript + Vite
+- **Tailwind CSS** + shadcn/ui (Radix UI primitives)
+- **Framer Motion**, **Three.js / OGL** for visuals
+- **TanStack Query**, **Axios**, **React Hook Form** + Zod
+- **Vitest** for tests
 
-There are several ways of editing your application.
+## Setup
 
-**Use Lovable**
+```bash
+npm install
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
+# Point at your backend (defaults to http://localhost:8000)
+echo "VITE_API_BASE_URL=http://localhost:8000" > .env.local
 
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+# Dev server
 npm run dev
+
+# Build / lint / test
+npm run build
+npm run lint
+npm run test
 ```
 
-**Edit a file directly in GitHub**
+## Pages
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+| Route | Purpose |
+|-------|---------|
+| `/` | Landing |
+| `/analysis` | Upload trainer + user videos, run form analysis, browse frame scoring |
+| `/generate` | Generate a corrected-form image from a frame |
+| `/login` | Sign in (JWT stored in `localStorage.access_token`) |
+| `/signup` | Create an account |
+| `/generate` | AI form correction |
 
-**Use GitHub Codespaces**
+## Configuration
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+All backend URLs default to the FastAPI `/api/v1` endpoints and can be overridden via `VITE_*` env vars
+(see `src/lib/api.ts`): `VITE_API_BASE_URL`, `VITE_GENERATE_IMAGE_URL`, `VITE_POSE_TRANSFER_URL`.

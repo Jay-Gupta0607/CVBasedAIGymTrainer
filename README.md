@@ -1,13 +1,25 @@
 # CVBasedAIGymTrainer 🏋️‍♂️
 
-> Production-grade Computer Vision pipeline for real-time exercise form analysis and AI-powered correction generation.
+> Computer Vision pipeline for exercise form analysis and AI-powered correction generation.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
 [![React 18](https://img.shields.io/badge/React-18-61DAFB.svg)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-ready-blue.svg)](https://www.docker.com/)
 [![ONNX Runtime](https://img.shields.io/badge/ONNX%20Runtime-1.18+-orange.svg)](https://onnxruntime.ai/)
+
+## Project Status
+
+The core ML pipeline and both frontend/backend are implemented. What's wired end-to-end versus what still
+needs local ML models and infrastructure to actually run:
+
+- ✅ **Auth** — sign up, log in, JWT + refresh tokens (frontend stores the access token and sends it on every request)
+- ✅ **Analysis API** — create an analysis (with or without a trainer video) and poll for results
+- ✅ **AI form correction + pose transfer** — endpoint + UI, once an image-generation service endpoint is configured
+- ⏳ **Running a real analysis** — requires the ONNX models (see [Download the ML models](#download-the-ml-models))
+  plus PostgreSQL (pgvector), Redis, and S3/MinIO on the backend
+- 🧪 **Experimental / reference** — ComfyUI workflows (`Workflows/`), Modal serverless deployment (`Modal/`),
+  ComfyUI setup (`COMFYUI_SETUP/`), AWS Terraform (`terraform/`), performance benchmarks (`benchmarks/`)
 
 ## Architecture Overview
 
@@ -18,7 +30,7 @@
 │                                                                                      │
 │  ┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐        │
 │  │   React     │────▶│   FastAPI   │────▶│  ML Pipeline │     │  Storage    │        │
-│  │  Frontend   │     │   Backend   │     │ (ONNX/TensorRT)│    │  (S3/MinIO) │        │
+│  │  Frontend   │     │   Backend   │     │ (ONNX Runtime)│    │  (S3/MinIO) │        │
 │  └─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘        │
 │        │                   │                   │                   │                 │
 │        ▼                   ▼                   ▼                   ▼                 │
@@ -47,37 +59,20 @@
 - 🎯 **Real-time Pose Estimation** - MediaPipe BlazePose 3D (33 landmarks) via ONNX Runtime
 - 🔄 **Video Synchronization** - Dynamic Time Warping (DTW) for automatic rep matching regardless of speed
 - 📊 **Biomechanical Scoring** - Joint angles, ROM, velocity → LightGBM error score (0-100)
-- 🎨 **AI Form Correction** - FLUX.1-schnell generates corrected form images (via Modal/Replicate)
+- 🎨 **AI Form Correction** - FLUX.1-schnell generates corrected form images (via Modal, optional)
+- 🎥 **Pose Transfer** - DWPose + ControlNet to render your body in the trainer's form (optional)
 - 💬 **AI Coach Chat** - Conversational fitness guidance with context from your history
 - 📈 **Progress Tracking** - Historical analysis, rep counting, trend visualization
 - 🔐 **JWT Authentication** - Secure login/signup with refresh token rotation
-- 📡 **Real-time Progress** - WebSocket streaming for analysis progress updates
-- 🐳 **Docker Ready** - Multi-stage builds with CUDA support for GPU inference
-- ☁️ **Cloud Native** - Terraform for AWS (ECS Fargate, RDS, ElastiCache, ALB, S3)
+- 📡 **Real-time Progress** - WebSocket streaming for chat; REST polling for analysis status
+- ☁️ **Cloud Native (reference)** - Terraform for AWS (ECS Fargate, RDS, ElastiCache, ALB, S3)
 
 ## Quick Start
 
-### Local Development (Docker Compose)
+> **Prerequisites:** Python 3.11+, Node 18+, and for full functionality PostgreSQL with `pgvector`,
+> Redis, and S3/MinIO (for local dev, see [Local Infrastructure](#local-infrastructure)).
 
-```bash
-# Clone the repository
-git clone https://github.com/Jay-Gupta0607/CVBasedAIGymTrainer.git
-cd CVBasedAIGymTrainer
-
-# Create environment file
-cp .env.example .env
-# Edit .env with your settings (JWT_SECRET, MODAL_API_KEY, etc.)
-
-# Start all services
-docker-compose up --build
-
-# Access:
-# Frontend: http://localhost:3000
-# API Docs: http://localhost:8000/docs
-# MinIO Console: http://localhost:9001
-```
-
-### Manual Backend Setup
+### Backend
 
 ```bash
 cd backend
@@ -87,10 +82,11 @@ python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 
 # Install dependencies
-pip install -r requirements/dev.txt
-pip install -r requirements/ml.txt  # For model conversion
+pip install -r requirements/base.txt
+pip install -r requirements/dev.txt      # dev tooling
+pip install -r requirements/ml.txt       # model conversion only (PyTorch, etc.)
 
-# Set environment variables
+# Set environment variables (or copy the root .env.example to .env)
 export DATABASE_URL="postgresql+asyncpg://trainer:password@localhost:5432/gym_trainer"
 export REDIS_URL="redis://localhost:6379/0"
 export JWT_SECRET="your-super-secret-jwt-key-change-in-production-min-32-chars"
@@ -98,16 +94,20 @@ export S3_ENDPOINT="http://localhost:9000"
 export S3_ACCESS_KEY="minioadmin"
 export S3_SECRET_KEY="minioadmin"
 export S3_BUCKET="gym-trainer"
+export MODELS_DIR="./models"
 export ONNX_PROVIDERS="CPUExecutionProvider"
 
-# Initialize database
+# Apply database migrations
 alembic upgrade head
 
 # Run server
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-### Frontend Development
+- API docs: <http://localhost:8000/docs>
+- Health check: <http://localhost:8000/api/v1/health>
+
+### Frontend
 
 ```bash
 cd FRONTEND
@@ -115,18 +115,53 @@ cd FRONTEND
 # Install dependencies
 npm install
 
-# Create .env.local
+# Point the frontend at your backend (defaults to http://localhost:8000)
 echo "VITE_API_BASE_URL=http://localhost:8000" > .env.local
 
 # Start dev server
 npm run dev
 ```
 
+### Local Infrastructure
+
+The analysis endpoints persist jobs and upload videos, so they need PostgreSQL, Redis, and S3/MinIO
+running. Any local instance works — for example, run the services manually (Postgres with the `pgvector`
+extension, `redis-server`, and a MinIO server), or substitute managed equivalents. Model-less endpoints
+(`/api/v1/health`) boot without them.
+
+## Download the ML Models
+
+The repo ships **no model binaries** — they're produced with the conversion scripts and written to
+`MODELS_DIR` (the config default is the container path `/app/models`, so set it locally, e.g. `./models`).
+
+```bash
+mkdir -p models
+
+# 1. MediaPipe pose → ONNX
+#    (download pose_landmarker_full.task first:
+#    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task)
+python backend/scripts/convert_mediapipe_to_onnx.py \
+  --model_path pose_landmarker_full.task \
+  --output_dir models
+
+# 2. DWPose → ONNX (for pose transfer; needs PyTorch from requirements/ml.txt)
+python backend/scripts/download_dwpose.py --output-dir models
+
+# 3. LightGBM form scorer → ONNX (sample model for testing)
+python backend/scripts/convert_lightgbm_to_onnx.py --create_sample --output_dir models --n_features 156
+
+# Set env vars to point at the generated files, e.g.:
+#   MODELS_DIR=./models
+#   POSE_MODEL_PATH=./models/pose_landmarker.onnx
+#   DWPOSE_MODEL_PATH=./models/dwpose.onnx
+#   SCORER_MODEL_PATH=./models/form_scorer.onnx
+```
+
 ## API Documentation
 
 ### Base URL
+
 - Local: `http://localhost:8000/api/v1`
-- Production: `https://api.yourdomain.com/api/v1`
 
 ### Endpoints
 
@@ -141,11 +176,12 @@ npm run dev
 | `GET` | `/auth/me` | Get current user info |
 | `POST` | `/analyze` | Create analysis (trainer + user video) |
 | `POST` | `/analyze/no-trainer` | Create analysis (user video only) |
-| `GET` | `/analyze/{task_id}/status` | Get analysis status |
+| `GET` | `/analyze/{task_id}/status` | Get analysis status / results |
 | `GET` | `/analyze/history` | Get user analysis history |
 | `POST` | `/chat` | Send message to AI coach |
 | `WS` | `/ws/chat` | WebSocket real-time chat |
 | `POST` | `/generate` | Generate corrected form image |
+| `POST` | `/generate/pose-transfer` | Generate pose transfer image |
 
 ### Analysis Request (with trainer)
 
@@ -186,7 +222,7 @@ curl -X POST http://localhost:8000/api/v1/analyze \
         "technical_observation": "Left knee valgus 5°, Right knee neutral",
         "user_image_key": "s3://bucket/frames/...",
         "trainer_image_key": "s3://bucket/frames/...",
-        "joint_angles": {"left_knee": 95, "right_knee": 93, ...},
+        "joint_angles": {"left_knee": 95, "right_knee": 93},
         "pose_landmarks": [...]
       }
     ],
@@ -261,15 +297,6 @@ python benchmark_analysis.py --num_runs 50 --video_path ../sample_video.mp4
 
 *Tested on: Intel i7-12700K / RTX 3080 10GB / 32GB RAM*
 
-### Expected Results on CPU (ONNX Runtime)
-
-| Component | Latency (P50) | Throughput |
-|-----------|---------------|------------|
-| Pose Estimation | 35ms | 28 FPS |
-| DTW Alignment | 80ms | - |
-| Form Scoring | 5ms | 200/sec |
-| Full Pipeline | 12s | 5 analyses/min |
-
 ## Tech Stack
 
 ### Frontend
@@ -282,11 +309,10 @@ python benchmark_analysis.py --num_runs 50 --video_path ../sample_video.mp4
 
 ### Backend
 - **FastAPI** (async) + Pydantic v2
-- **SQLAlchemy 2.0** + Alembic (async PostgreSQL)
-- **pgvector** for vector embeddings
+- **SQLAlchemy 2.0** + Alembic (async PostgreSQL + pgvector)
 - **Redis** for caching + Celery broker
 - **Celery** for async task processing
-- **ONNX Runtime** with TensorRT EP
+- **ONNX Runtime** (TensorRT EP optional)
 - **MediaPipe** (BlazePose GHUM 3D)
 - **LightGBM** + skl2onnx
 - **boto3/minio** for S3 storage
@@ -296,20 +322,18 @@ python benchmark_analysis.py --num_runs 50 --video_path ../sample_video.mp4
 - **FastDTW** → pose embedding alignment
 - **Biomechanical rules** → joint angles, ROM, velocity
 - **LightGBM** → error scoring (0-100)
-- **FLUX.1-schnell** (via Modal) → form correction images
+- **DWPose + ControlNet** → pose transfer conditioning
+- **FLUX.1-schnell** (via Modal, optional) → form correction images
 
 ### Infrastructure
-- **Docker** multi-stage builds (CUDA 12.4)
-- **docker-compose** for local dev
-- **GitHub Actions** CI/CD
-- **Terraform** for AWS (ECS Fargate, RDS Aurora, ElastiCache, ALB, S3)
-- **Hugging Face Spaces** for frontend demo
-- **Prometheus** + **Grafana** monitoring
-- **structlog** JSON logging
+- **Observability** — Prometheus (`/metrics`) + Grafana; **structlog** JSON logging; Sentry optional
+- **AWS Terraform (reference)** — `terraform/` for ECS Fargate, RDS Aurora, ElastiCache, ALB, S3
+- **Serverless generation (reference)** — `Modal/` for Modal + ComfyUI workloads
+- **Experiments** — `Workflows/` (ComfyUI DWPose/Canny/FLUX), `COMFYUI_SETUP/`, `benchmarks/`
 
 ## Deployment
 
-### AWS (Production)
+### AWS (reference)
 
 ```bash
 cd terraform/environments/production
@@ -324,13 +348,6 @@ terraform plan -var="db_password=..." -var="jwt_secret=..." -var="acm_certificat
 terraform apply -var="db_password=..." -var="jwt_secret=..." -var="acm_certificate_arn=..." -var="ecr_repository_url=..."
 ```
 
-### Hugging Face Spaces (Frontend Demo)
-
-1. Create new Space → Docker
-2. Set `Dockerfile` to `FRONTEND/Dockerfile.hf`
-3. Add secrets: `VITE_API_BASE_URL`
-4. Deploy
-
 ### Environment Variables
 
 | Variable | Required | Description |
@@ -342,17 +359,28 @@ terraform apply -var="db_password=..." -var="jwt_secret=..." -var="acm_certifica
 | `S3_ACCESS_KEY` | Yes | S3 access key |
 | `S3_SECRET_KEY` | Yes | S3 secret key |
 | `S3_BUCKET` | Yes | S3 bucket name |
-| `MODAL_API_KEY` | No | Modal API key for FLUX |
-| `MODAL_IMAGE_GEN_ENDPOINT` | No | Modal webhook URL |
+| `MODELS_DIR` | Yes | Directory containing ONNX models |
+| `POSE_MODEL_PATH` | No | MediaPipe pose ONNX model path |
+| `DWPOSE_MODEL_PATH` | No | DWPose ONNX model path |
+| `SCORER_MODEL_PATH` | No | LightGBM scorer ONNX model path |
 | `ONNX_PROVIDERS` | No | Execution providers (default: CPU) |
-| `MODELS_DIR` | No | Directory for ONNX models |
+| `MODAL_API_KEY` | No | Modal API key for FLUX |
+| `MODAL_IMAGE_GEN_ENDPOINT` | No | Modal webhook for corrected-form generation |
+| `MODAL_POSE_TRANSFER_ENDPOINT` | No | Modal webhook for pose transfer |
 | `TEMP_DIR` | No | Temp directory for video processing |
+
+Frontend (`FRONTEND/.env.local`):
+
+| Variable | Description |
+|----------|-------------|
+| `VITE_API_BASE_URL` | Backend base URL (default: `http://localhost:8000`) |
+| `VITE_GENERATE_IMAGE_URL` | Override for the image-generation endpoint |
+| `VITE_POSE_TRANSFER_URL` | Override for the pose-transfer endpoint |
 
 ## Project Structure
 
 ```
 CVBasedAIGymTrainer/
-├── .github/workflows/          # CI/CD pipelines
 ├── backend/                    # FastAPI backend
 │   ├── app/
 │   │   ├── api/v1/            # API endpoints
@@ -364,29 +392,29 @@ CVBasedAIGymTrainer/
 │   │   ├── services/          # ML services
 │   │   │   ├── ml_pipeline.py     # End-to-end orchestrator
 │   │   │   ├── pose_estimator.py  # MediaPipe ONNX
+│   │   │   ├── dwpose_estimator.py# DWPose (pose transfer)
+│   │   │   ├── pose_alignment.py  # Facing-direction alignment
 │   │   │   ├── dtw_aligner.py     # DTW synchronization
 │   │   │   ├── form_scorer.py     # LightGBM + rules
 │   │   │   ├── video_processor.py # ffmpeg + S3
 │   │   │   ├── storage.py         # S3/MinIO client
 │   │   │   └── auth.py            # JWT auth
 │   │   └── workers/           # Celery tasks
-│   ├── scripts/               # Model conversion scripts
-│   ├── models/                # ONNX/TensorRT models
-│   ├── Dockerfile
+│   ├── scripts/               # Model conversion/download scripts
+│   ├── alembic/               # Database migrations
+│   ├── tests/                 # Pytest suite
 │   ├── pyproject.toml
 │   └── requirements/
 ├── FRONTEND/                  # React frontend
 │   ├── src/
 │   ├── public/
-│   ├── Dockerfile
-│   ├── Dockerfile.hf
 │   ├── nginx.conf
-│   └── nginx.hf.conf
-├── terraform/                 # AWS Infrastructure
-│   ├── modules/
-│   └── environments/
+│   └── package.json
+├── Workflows/                 # ComfyUI workflows (experimental)
+├── Modal/                     # Modal serverless generation (reference)
+├── COMFYUI_SETUP/             # ComfyUI setup notebooks
 ├── benchmarks/                # Performance benchmarks
-├── docker-compose.yml
+├── terraform/                 # AWS infrastructure (reference)
 ├── .env.example
 ├── LICENSE
 └── README.md

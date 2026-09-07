@@ -6,6 +6,7 @@ import ImageUploader from "@/components/shared/ImageUploader";
 import FrameCard from "@/components/shared/FrameCard";
 import { analyzeMovement, analyzeMovementWithoutTrainer, type AnalysisResponse} from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 // Make sure to point this to the correct location of your Galaxy component
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,9 @@ export default function AnalyzeMovement() {
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [email, setEmail] = useState("");
+  const { user } = useAuth();
+  const emailValue = user?.email || email;
   const { toast } = useToast();
 
   const handleAnalyze = async () => {
@@ -71,13 +75,21 @@ export default function AnalyzeMovement() {
       });
       return;
     }
+    if (!emailValue.trim()) {
+      toast({
+        title: "Email required",
+        description: "Please log in or enter your email.",
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
     setUploadProgress(0);
     try {
-      const data = await analyzeMovement(trainerVideo, userVideo, exerciseName, "anksushraj2024@gmail.com", setUploadProgress);
+      const data = await analyzeMovement(trainerVideo, userVideo, exerciseName, emailValue, setUploadProgress);
       console.log(data);
       setResult(data);
-    } catch (err: any) {
+    } catch (err) {
       toast({
         title: "Analysis failed",
         description: err?.message || "Could not reach the backend.",
@@ -97,12 +109,20 @@ export default function AnalyzeMovement() {
       });
       return;
     }
+    if (!emailValue.trim()) {
+      toast({
+        title: "Email required",
+        description: "Please log in or enter your email.",
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
     setUploadProgress(0);
     try {
-      const data = await analyzeMovementWithoutTrainer( userVideo, exerciseName, "anksushraj2024@gmail.com", setUploadProgress);
+      const data = await analyzeMovementWithoutTrainer( userVideo, exerciseName, emailValue, setUploadProgress);
       setResult(data);
-    } catch (err: any) {
+    } catch (err) {
       toast({
         title: "Analysis failed",
         description: err?.message || "Could not reach the backend.",
@@ -222,6 +242,22 @@ export default function AnalyzeMovement() {
                 </PopoverContent>
               </Popover>
             </div>
+
+            {/* Email (only needed when logged out — analysis is attributed by account when logged in) */}
+            {!user?.email && (
+              <div className="mb-6">
+                <label className="text-sm font-medium text-gray-200 mb-2 block">
+                  Your Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                />
+              </div>
+            )}
 
             {/* Trainer Reference Image for Pose Transfer */}
             <div className="mb-6">
