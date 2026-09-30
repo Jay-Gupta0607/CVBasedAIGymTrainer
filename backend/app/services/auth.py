@@ -27,9 +27,14 @@ def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
 
 
+def _encode_claims(data: dict) -> dict:
+    """JSON-serializable copy of claims (UUID/datetime -> str)."""
+    return {k: (str(v) if isinstance(v, (UUID, datetime)) else v) for k, v in data.items()}
+
+
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create JWT access token."""
-    to_encode = data.copy()
+    to_encode = _encode_claims(data)
     expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
     to_encode.update({"exp": expire, "type": "access"})
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
@@ -37,7 +42,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
 
 def create_refresh_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
     """Create JWT refresh token."""
-    to_encode = data.copy()
+    to_encode = _encode_claims(data)
     expire = datetime.utcnow() + (expires_delta or timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS))
     to_encode.update({"exp": expire, "type": "refresh"})
     return jwt.encode(to_encode, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
@@ -51,16 +56,20 @@ async def create_refresh_token_db(
 ) -> str:
     """Create and store a refresh token in database."""
     import secrets
+    import hashlib
 
     # Generate a secure random token
     token = secrets.token_urlsafe(32)
     token_hash = get_password_hash(token)
+    # Fast O(1) lookup key: sha256(token)[:64] - no bcrypt needed for lookup
+    token_key = hashlib.sha256(token.encode()).hexdigest()[:64]
 
     expires_at = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
 
     refresh_token = RefreshToken(
         user_id=user_id,
         token_hash=token_hash,
+        token_key=token_key,
         expires_at=expires_at,
         user_agent=user_agent,
         ip_address=ip_address,
@@ -92,41 +101,55 @@ async def get_user_by_id(db: AsyncSession, user_id: UUID) -> Optional[UserInDB]:
 
 
 async def validate_refresh_token(db: AsyncSession, token: str) -> Optional[UserInDB]:
-    """Validate refresh token and return user if valid."""
-    # Find the token by user_id would be better, but we hash and compare
-    # Since we used bcrypt in create_refresh_token_db, we need to check all unrevoked tokens
+    """Validate refresh token and return user if valid. O(1) lookup via token_key."""
+    import hashlib
+
+    # Fast O(1) lookup using token_key (sha256 of raw token)
+    token_key = hashlib.sha256(token.encode()).hexdigest()[:64]
+
     result = await db.execute(
         select(RefreshToken)
+        .where(RefreshToken.token_key == token_key)
         .where(RefreshToken.revoked_at.is_(None))
         .where(RefreshToken.expires_at > datetime.utcnow())
     )
-    tokens = result.scalars().all()
+    refresh_token = result.scalar_one_or_none()
 
-    # Verify against each stored bcrypt hash
-    for refresh_token in tokens:
-        if verify_password(token, refresh_token.token_hash):
-            # Get associated user
-            result = await db.execute(select(User).where(User.id == refresh_token.user_id))
-            return result.scalar_one_or_none()
+    if not refresh_token:
+        return None
 
-    return None
+    # Verify bcrypt hash (constant-time) for security
+    if not verify_password(token, refresh_token.token_hash):
+        return None
+
+    # Get associated user
+    result = await db.execute(select(User).where(User.id == refresh_token.user_id))
+    return result.scalar_one_or_none()
 
 
 async def revoke_refresh_token(db: AsyncSession, token: str) -> bool:
-    """Revoke a refresh token."""
-    # Find and verify the token
+    """Revoke a refresh token. O(1) lookup via token_key."""
+    import hashlib
+
+    token_key = hashlib.sha256(token.encode()).hexdigest()[:64]
+
     result = await db.execute(
         select(RefreshToken)
+        .where(RefreshToken.token_key == token_key)
         .where(RefreshToken.revoked_at.is_(None))
         .where(RefreshToken.expires_at > datetime.utcnow())
     )
-    tokens = result.scalars().all()
+    refresh_token = result.scalar_one_or_none()
 
-    for refresh_token in tokens:
-        if verify_password(token, refresh_token.token_hash):
-            refresh_token.revoked_at = datetime.utcnow()
-            return True
-    return False
+    if not refresh_token:
+        return False
+
+    # Verify bcrypt hash for security
+    if not verify_password(token, refresh_token.token_hash):
+        return False
+
+    refresh_token.revoked_at = datetime.utcnow()
+    return True
 
 
 async def revoke_all_user_tokens(db: AsyncSession, user_id: UUID) -> int:

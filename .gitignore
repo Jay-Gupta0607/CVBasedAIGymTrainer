@@ -122,3 +122,10 @@ coverage/
 *.pem
 .vercel
 .netlify
+# Local infrastructure (Postgres etc.)
+.infra/
+
+# Backend local config & models
+backend/.env
+backend/models/
+backend/tmp/

@@ -7,6 +7,7 @@ from typing import Optional
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db_session, get_current_user, get_optional_user
@@ -25,6 +26,8 @@ from app.services.auth import create_refresh_token_db, get_user_by_email, get_pa
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+CHUNK_SIZE = 1024 * 1024  # 1MB chunks
 
 async def read_file_with_size_limit(file: UploadFile, max_size_mb: int) -> bytes:
     """Read file in chunks with size limit to prevent memory exhaustion."""
@@ -61,17 +64,17 @@ async def create_analysis(
             raise HTTPException(400, f"{name}: No filename provided")
 
         ext = Path(video.filename).suffix.lower()
-        if ext not in settings.SUPPORTED_VIDEO_FORMATS:
-            raise HTTPException(400, f"{name}: Unsupported format. Use: {settings.SUPPORTED_VIDEO_FORMATS}")
+        if ext not in settings.supported_video_formats_list:
+            raise HTTPException(400, f"{name}: Unsupported format. Use: {settings.supported_video_formats_list}")
 
     # Check file sizes - stream and validate to prevent memory exhaustion
     max_size_mb = settings.MAX_VIDEO_SIZE_MB
     trainer_content = await read_file_with_size_limit(trainer_video, max_size_mb)
     user_content = await read_file_with_size_limit(user_video, max_size_mb)
 
-    # Validate exercise_name against enum
+    # Validate exercise_name against enum and use the canonical value from here on
     try:
-        ExerciseType(exercise_name)
+        exercise_name = ExerciseType.parse(exercise_name).value
     except ValueError:
         valid_exercises = [e.value for e in ExerciseType]
         raise HTTPException(400, f"Invalid exercise_name. Valid options: {valid_exercises}")
@@ -179,6 +182,7 @@ async def process_analysis_task(
                 trainer_video_path,
                 exercise_name,
                 progress_callback,
+                task_id=task_id,
             )
 
             # Save frame analyses
@@ -241,15 +245,15 @@ async def create_analysis_no_trainer(
         raise HTTPException(400, "No filename provided")
 
     ext = Path(user_video.filename).suffix.lower()
-    if ext not in settings.SUPPORTED_VIDEO_FORMATS:
-        raise HTTPException(400, f"Unsupported format. Use: {settings.SUPPORTED_VIDEO_FORMATS}")
+    if ext not in settings.supported_video_formats_list:
+        raise HTTPException(400, f"Unsupported format. Use: {settings.supported_video_formats_list}")
 
     # Stream and validate size to prevent memory exhaustion
     user_content = await read_file_with_size_limit(user_video, settings.MAX_VIDEO_SIZE_MB)
 
-    # Validate exercise_name against enum
+    # Validate exercise_name against enum and use the canonical value from here on
     try:
-        ExerciseType(exercise_name)
+        exercise_name = ExerciseType.parse(exercise_name).value
     except ValueError:
         valid_exercises = [e.value for e in ExerciseType]
         raise HTTPException(400, f"Invalid exercise_name. Valid options: {valid_exercises}")
@@ -336,6 +340,7 @@ async def process_analysis_no_trainer_task(
                 user_video_path,
                 exercise_name,
                 progress_callback,
+                task_id=task_id,
             )
 
             from app.models import AnalysisFrame
@@ -385,6 +390,7 @@ async def get_analysis_status(
 ):
     """Get analysis job status."""
     from sqlalchemy import select
+
     result = await db.execute(
         select(Analysis).where(Analysis.task_id == task_id).where(Analysis.user_id == current_user.id)
     )
@@ -393,15 +399,49 @@ async def get_analysis_status(
     if not analysis:
         raise HTTPException(404, "Analysis not found")
 
-    # Generate presigned URLs on-demand
+    # Collect all S3 keys and generate presigned URLs in one parallel batch
     storage = get_storage_service()
-    trainer_video_url = storage.generate_presigned_url(analysis.trainer_video_key) if analysis.trainer_video_key else ""
-    user_video_url = storage.generate_presigned_url(analysis.user_video_key) if analysis.user_video_key else ""
+
+    all_keys: list[str] = []
+    if analysis.trainer_video_key:
+        all_keys.append(analysis.trainer_video_key)
+    if analysis.user_video_key:
+        all_keys.append(analysis.user_video_key)
+
+    # Collect frame image keys from stored results
+    if analysis.status.value == "completed" and analysis.frames_data:
+        for frame in analysis.frames_data:
+            row = dict(frame)
+            u_key = row.get("user_image_key")
+            t_key = row.get("trainer_image_key")
+            if u_key:
+                all_keys.append(u_key)
+            if t_key:
+                all_keys.append(t_key)
+
+    # Single parallel batch — O(1) network round-trips instead of O(n)
+    presigned = storage.generate_presigned_urls_batch(all_keys) if all_keys else {}
+
+    trainer_video_url = presigned.get(analysis.trainer_video_key, "")
+    user_video_url = presigned.get(analysis.user_video_key, "")
 
     result_data = None
     if analysis.status.value == "completed" and analysis.frames_data:
+        # Stream frame images from object storage via short-lived presigned URLs.
+        # Legacy rows carry base64 and no keys -> those pass through unchanged.
+        frames = []
+        for frame in analysis.frames_data:
+            row = dict(frame)
+            user_key = row.get("user_image_key")
+            trainer_key = row.get("trainer_image_key")
+            if user_key:
+                row["user_image_url"] = presigned.get(user_key, "")
+            if trainer_key:
+                row["trainer_image_url"] = presigned.get(trainer_key, "")
+            frames.append(row)
+
         result_data = AnalysisResponse(
-            analysis=analysis.frames_data,
+            analysis=frames,
             reps=analysis.reps,
             feedback_summary=analysis.feedback_summary or "",
             technical_details=analysis.technical_details or [],
@@ -452,3 +492,51 @@ async def get_analysis_history(
         }
         for a in analyses
     ]
+
+
+@router.get("/analyze/frames/{s3_key:path}")
+async def proxy_frame_image(
+    s3_key: str,
+    db: AsyncSession = Depends(get_db_session),
+    current_user: User = Depends(get_current_user),
+):
+    """Proxy endpoint for frame images stored in S3.
+
+    Presigned URLs expire after 1 hour. This endpoint streams images through the
+    backend so old analyses still display correctly.
+    """
+    from botocore.exceptions import ClientError
+    from sqlalchemy import select
+
+    # Security: verify the user owns an analysis that references this key.
+    # The key format is frames/<task_id>/<frame_id>_<side>.jpg
+    # We extract the task_id prefix to check ownership.
+    parts = s3_key.split("/")
+    if len(parts) < 2 or parts[0] != "frames":
+        raise HTTPException(400, "Invalid frame key format")
+
+    task_id = parts[1]
+    result = await db.execute(
+        select(Analysis)
+        .where(Analysis.task_id == task_id)
+        .where(Analysis.user_id == current_user.id)
+    )
+    analysis = result.scalar_one_or_none()
+    if not analysis:
+        raise HTTPException(404, "Analysis not found or access denied")
+
+    storage = get_storage_service()
+    try:
+        response = storage.client.get_object(Bucket=settings.S3_BUCKET, Key=s3_key)
+        content_length = response.get("ContentLength", 0)
+        if content_length and content_length > 5 * 1024 * 1024:  # 5MB safety limit
+            raise HTTPException(413, "Frame image too large")
+        body = response["Body"].read()
+    except ClientError:
+        raise HTTPException(404, "Frame image not found")
+
+    return StreamingResponse(
+        iter([body]),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "private, max-age=3600"},
+    )

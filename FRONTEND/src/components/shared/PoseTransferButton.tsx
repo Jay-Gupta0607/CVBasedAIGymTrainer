@@ -13,6 +13,9 @@ interface PoseTransferButtonProps {
 }
 
 async function imageSourceToFile(src: string, filename: string): Promise<File> {
+  if (!src || !src.trim()) {
+    throw new Error("No image source provided");
+  }
   // If it's already a data URL, convert directly
   if (src.startsWith("data:")) {
     const arr = src.split(",");

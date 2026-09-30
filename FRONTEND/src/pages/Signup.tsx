@@ -26,10 +26,11 @@ export default function Signup() {
     try {
       const data = await signupUser(email, password);
       localStorage.setItem("user", JSON.stringify({ email, ...data }));
+      localStorage.setItem("access_token", data.access_token);
       window.dispatchEvent(new Event("auth-change"));
       toast({ title: "Account created!", description: `Welcome, ${email}` });
       navigate("/");
-    } catch (err: any) {
+    } catch (err) {
       toast({ title: "Signup failed", description: err?.response?.data?.detail || "Could not create account.", variant: "destructive" });
     } finally {
       setLoading(false);

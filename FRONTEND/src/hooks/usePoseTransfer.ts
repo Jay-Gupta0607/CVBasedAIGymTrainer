@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect } from "react";
-import { generatePoseTransfer } from "@/lib/api";
+import { generatePoseTransfer, getErrorMessage } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 
 export interface PoseTransferResult {
@@ -49,10 +49,10 @@ export function usePoseTransfer() {
         });
 
         return transferResult;
-      } catch (err: any) {
+      } catch (err) {
         toast({
-          title: "Generation failed",
-          description: err?.message || "Could not generate pose transfer image.",
+          title: "Generation unavailable",
+          description: getErrorMessage(err),
           variant: "destructive",
         });
         return null;

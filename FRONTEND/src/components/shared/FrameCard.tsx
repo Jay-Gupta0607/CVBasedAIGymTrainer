@@ -4,7 +4,7 @@ import ReactMarkdown from "react-markdown";
 import ScoreGauge from "./ScoreGauge";
 import PoseTransferButton from "./PoseTransferButton";
 import type { AnalysisFrame } from "@/lib/api";
-import { useState } from "react";
+import { useState, memo } from "react";
 
 interface FrameCardProps {
   frame: AnalysisFrame;
@@ -13,15 +13,27 @@ interface FrameCardProps {
   trainerReferenceImage?: string; // base64 trainer reference for pose transfer
 }
 
-export default function FrameCard({ frame, index }: FrameCardProps) {
+function FrameCardInner({ frame, index, exerciseName, trainerReferenceImage }: FrameCardProps) {
   const [expanded, setExpanded] = useState(false);
+
+  // Prefer presigned URL, fall back to legacy base64 data URL
+  const userSrc = frame.user_image_url
+    ? frame.user_image_url
+    : frame.user_image
+      ? `data:image/jpeg;base64,${frame.user_image}`
+      : "";
+  const trainerSrc = frame.trainer_image_url
+    ? frame.trainer_image_url
+    : frame.trainer_image
+      ? `data:image/jpeg;base64,${frame.trainer_image}`
+      : "";
 
   return (
     <>
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: index * 0.1 }}
+        transition={{ duration: 0.25 }}  // no stagger delay
         className="glass rounded-xl p-5 hover-lift"
       >
         <div className="flex items-start justify-between mb-4">
@@ -45,17 +57,23 @@ export default function FrameCard({ frame, index }: FrameCardProps) {
           <div className="rounded-lg overflow-hidden border border-border/50">
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-2 py-1 bg-secondary/50">User</p>
             <img
-              src={`data:image/jpeg;base64,${frame.user_image}`}
+              src={userSrc}
               alt="User frame"
               className="w-full aspect-video object-cover"
+              loading="lazy"
+              decoding="async"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           </div>
           <div className="rounded-lg overflow-hidden border border-border/50">
             <p className="text-[10px] uppercase tracking-widest text-muted-foreground px-2 py-1 bg-secondary/50">Trainer</p>
             <img
-              src={`data:image/jpeg;base64,${frame.trainer_image}`}
+              src={trainerSrc}
               alt="Trainer frame"
               className="w-full aspect-video object-cover"
+              loading="lazy"
+              decoding="async"
+              onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
             />
           </div>
         </div>
@@ -75,8 +93,8 @@ export default function FrameCard({ frame, index }: FrameCardProps) {
         {/* Pose Transfer Button */}
         <div className="mt-4">
           <PoseTransferButton
-            userImage={frame.user_image}
-            trainerImage={trainerReferenceImage}
+            userImage={userSrc}
+            trainerImage={trainerReferenceImage || trainerSrc}
             exerciseName={exerciseName}
             frameId={frame.frame_id}
           />
@@ -98,11 +116,11 @@ export default function FrameCard({ frame, index }: FrameCardProps) {
             <div className="grid grid-cols-2 gap-4 mb-6">
               <div className="rounded-lg overflow-hidden border border-border/50">
                 <p className="text-xs uppercase tracking-widest text-muted-foreground px-3 py-2 bg-secondary/50">User Frame</p>
-                <img src={`data:image/jpeg;base64,${frame.user_image}`} alt="User" className="w-full" />
+                <img src={userSrc} alt="User" className="w-full" />
               </div>
               <div className="rounded-lg overflow-hidden border border-border/50">
                 <p className="text-xs uppercase tracking-widest text-muted-foreground px-3 py-2 bg-secondary/50">Trainer Frame</p>
-                <img src={`data:image/jpeg;base64,${frame.trainer_image}`} alt="Trainer" className="w-full" />
+                <img src={trainerSrc} alt="Trainer" className="w-full" />
               </div>
             </div>
             <div className="flex items-center gap-3 mb-4">
@@ -130,3 +148,6 @@ export default function FrameCard({ frame, index }: FrameCardProps) {
     </>
   );
 }
+
+const FrameCard = memo(FrameCardInner);
+export default FrameCard;

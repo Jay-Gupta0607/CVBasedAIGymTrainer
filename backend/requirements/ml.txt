@@ -2,6 +2,8 @@
 -r base.txt
 
 mediapipe==0.10.14
-tf2onnx==1.16.1
+# tf2onnx from git master: the 1.16.1 PyPI pin requires protobuf<4, which
+# conflicts with mediapipe (protobuf 4.25+). Master dropped that constraint.
+tf2onnx @ git+https://github.com/onnx/tensorflow-onnx.git
 tensorflow==2.16.1
 torch==2.3.0

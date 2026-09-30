@@ -4,8 +4,9 @@ import { Activity, RotateCcw, Play, Loader2, ChevronDown, Image as ImageIcon } f
 import VideoUploader from "@/components/shared/VideoUploader";
 import ImageUploader from "@/components/shared/ImageUploader";
 import FrameCard from "@/components/shared/FrameCard";
-import { analyzeMovement, analyzeMovementWithoutTrainer, type AnalysisResponse} from "@/lib/api";
+import { analyzeMovement, analyzeMovementWithoutTrainer, getErrorMessage, type AnalysisResponse } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { useAuth } from "@/hooks/useAuth";
 // Make sure to point this to the correct location of your Galaxy component
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -60,6 +61,10 @@ export default function AnalyzeMovement() {
   const [loading, setLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [result, setResult] = useState<AnalysisResponse | null>(null);
+  const [visibleCount, setVisibleCount] = useState(25);
+  const [email, setEmail] = useState("");
+  const { user } = useAuth();
+  const emailValue = user?.email || email;
   const { toast } = useToast();
 
   const handleAnalyze = async () => {
@@ -71,16 +76,24 @@ export default function AnalyzeMovement() {
       });
       return;
     }
+    if (!emailValue.trim()) {
+      toast({
+        title: "Email required",
+        description: "Please log in or enter your email.",
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
     setUploadProgress(0);
     try {
-      const data = await analyzeMovement(trainerVideo, userVideo, exerciseName, "anksushraj2024@gmail.com", setUploadProgress);
-      console.log(data);
+      const data = await analyzeMovement(trainerVideo, userVideo, exerciseName, emailValue, setUploadProgress);
       setResult(data);
-    } catch (err: any) {
+      setVisibleCount(25);
+    } catch (err) {
       toast({
         title: "Analysis failed",
-        description: err?.message || "Could not reach the backend.",
+        description: getErrorMessage(err),
         variant: "destructive",
       });
     } finally {
@@ -97,15 +110,24 @@ export default function AnalyzeMovement() {
       });
       return;
     }
+    if (!emailValue.trim()) {
+      toast({
+        title: "Email required",
+        description: "Please log in or enter your email.",
+        variant: "destructive",
+      });
+      return;
+    }
     setLoading(true);
     setUploadProgress(0);
     try {
-      const data = await analyzeMovementWithoutTrainer( userVideo, exerciseName, "anksushraj2024@gmail.com", setUploadProgress);
+      const data = await analyzeMovementWithoutTrainer(userVideo, exerciseName, emailValue, setUploadProgress);
       setResult(data);
-    } catch (err: any) {
+      setVisibleCount(25);
+    } catch (err) {
       toast({
         title: "Analysis failed",
-        description: err?.message || "Could not reach the backend.",
+        description: getErrorMessage(err),
         variant: "destructive",
       });
     } finally {
@@ -135,16 +157,16 @@ export default function AnalyzeMovement() {
         {/* We use width/height 100% here to fill the screen instead of fixed 1080px */}
         <div style={{ width: '100%', height: '100%', position: 'relative' }}>
           <Galaxy
-            starSpeed={0.5}
-            density={2}
+            starSpeed={0.3}
+            density={1}
             hueShift={150}
             speed={0.9}
-            glowIntensity={0.3}
-            saturation={0.35}
-            mouseRepulsion
+            glowIntensity={0.15}
+            saturation={0.25}
+            mouseRepulsion={false}
             repulsionStrength={2}
-            twinkleIntensity={0.25}
-            rotationSpeed={0.05}
+            twinkleIntensity={0.1}
+            rotationSpeed={0.02}
             transparent
           />
         </div>
@@ -222,6 +244,22 @@ export default function AnalyzeMovement() {
                 </PopoverContent>
               </Popover>
             </div>
+
+            {/* Email (only needed when logged out — analysis is attributed by account when logged in) */}
+            {!user?.email && (
+              <div className="mb-6">
+                <label className="text-sm font-medium text-gray-200 mb-2 block">
+                  Your Email
+                </label>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all"
+                />
+              </div>
+            )}
 
             {/* Trainer Reference Image for Pose Transfer */}
             <div className="mb-6">
@@ -343,7 +381,7 @@ export default function AnalyzeMovement() {
                   Frame Analysis ({result.analysis?.length || 0} frames)
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {result.analysis?.map((frame, i) => (
+                  {result.analysis?.slice(0, visibleCount).map((frame, i) => (
                     <FrameCard
                       key={frame.frame_id}
                       frame={frame}
@@ -353,6 +391,19 @@ export default function AnalyzeMovement() {
                     />
                   ))}
                 </div>
+                {result.analysis && result.analysis.length > visibleCount && (
+                  <div className="mt-6 flex justify-center">
+                    <button
+                      onClick={() => setVisibleCount((c) => Math.min(c + 25, result.analysis.length))}
+                      className="inline-flex items-center gap-2 px-6 py-3 rounded-xl glass bg-white/5 text-white font-medium hover:bg-white/10 transition-all border border-white/10"
+                    >
+                      <span>Load more frames</span>
+                      <span className="text-xs text-gray-400">
+                        ({visibleCount} / {result.analysis.length})
+                      </span>
+                    </button>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>

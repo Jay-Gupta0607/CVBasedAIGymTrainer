@@ -64,6 +64,9 @@ async def login(
     access_token = create_access_token({"sub": user.email, "user_id": user.id})
     refresh_token = await create_refresh_token_db(db, user.id)
 
+    # Persist the refresh token (login's earlier commit covered last_login only)
+    await db.commit()
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -100,6 +103,9 @@ async def signup(
     access_token = create_access_token({"sub": user.email, "user_id": user.id})
     refresh_token = await create_refresh_token_db(db, user.id)
 
+    # Persist the user and refresh token
+    await db.commit()
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -128,6 +134,9 @@ async def refresh_token(
     access_token = create_access_token({"sub": user.email, "user_id": user.id})
     refresh_token = await create_refresh_token_db(db, user.id)
 
+    # Persist the revocation of the old token and the newly issued one
+    await db.commit()
+
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
@@ -143,6 +152,7 @@ async def logout(
 ):
     """Logout - revoke refresh token."""
     await revoke_refresh_token(db, request.refresh_token)
+    await db.commit()
     return {"message": "Logged out successfully"}
 
 
