@@ -17,16 +17,25 @@ from app.config import settings
 from app.services.pose_estimator import PoseEstimator, get_pose_estimator
 from app.services.dwpose_estimator import DWPoseEstimator, get_dwpose_estimator
 from app.services.pose_alignment import PoseDirectionAligner, get_pose_aligner, create_controlnet_conditioning
-from app.services.dtw_aligner import (
-    DTWAligner,
-    compute_joint_angles,
-    compute_angle_differences,
-)
+from app.services.dtw_aligner import DTWAligner
+from app.services.exercise_rules import get_profile, joint_value
 from app.services.form_scorer import FormScorer, RuleBasedScorer, create_scorer
+from app.services.pose_features import (
+    compute_angle_differences,
+    compute_joint_angles,
+    pose_embedding,
+)
 from app.services.video_processor import VideoProcessor, get_video_processor
 from app.services.storage import get_storage_service
 
 logger = logging.getLogger(__name__)
+
+# Weight of the rule-based score in a frame's final score (the rest comes from the ML
+# scorer, or the landmark-distance fallback when no matching model is loaded)
+RULE_SCORE_WEIGHT = 0.5
+
+# If fewer than this share of frames have a measurable pose, say so in the summary
+MIN_DETECTED_SHARE = 0.2
 
 
 class MLPipeline:
@@ -114,11 +123,7 @@ class MLPipeline:
             total_score = 0
             violations_per_rep: Dict[int, List] = {}
 
-            # Get repetition segments
-            user_visibilities = np.array([p["visibility"] for p in user_poses])
-            segments = self.dtw_aligner.segment_repetitions(
-                user_embeddings, user_visibilities, exercise_name
-            )
+            segments = self._segment_reps(user_poses, exercise_name)
 
             for i, (user_emb_idx, trainer_emb_idx) in enumerate(warping_path):
                 if progress_callback and i % max(1, len(warping_path) // 20) == 0:
@@ -132,11 +137,10 @@ class MLPipeline:
                 user_pose = user_poses[user_emb_idx]
                 trainer_pose = trainer_poses[trainer_emb_idx]
 
-                # Compute joint angles
-                user_angles = compute_joint_angles(user_pose["landmarks"])
-                trainer_angles = compute_joint_angles(trainer_pose["landmarks"])
+                user_angles = user_pose["angles"]
+                trainer_angles = trainer_pose["angles"]
 
-                # Score frame
+                # ML score (or landmark-distance fallback) and rule-based score
                 error_score, contributions = self.form_scorer.score_frame(
                     user_pose["landmarks"],
                     user_pose["visibility"],
@@ -145,14 +149,12 @@ class MLPipeline:
                     user_angles,
                     trainer_angles,
                 )
-
-                # Rule-based analysis for detailed feedback
                 rule_score, violations = self.rule_scorer.score_frame(
                     exercise_name, user_angles, trainer_angles
                 )
-
-                # Combine scores (use ML score as primary, rule as validation)
-                final_score = error_score
+                final_score = int(round(
+                    (1 - RULE_SCORE_WEIGHT) * error_score + RULE_SCORE_WEIGHT * rule_score
+                ))
 
                 # Encode + upload downscaled frame images to object storage. Keep
                 # S3 keys (not base64) so status/history payloads stay tiny.
@@ -179,19 +181,25 @@ class MLPipeline:
 
                 # Track violations per rep
                 rep_idx = self._find_rep_index(user_pose["frame_idx"], segments)
-                if rep_idx not in violations_per_rep:
-                    violations_per_rep[rep_idx] = []
-                violations_per_rep[rep_idx].extend(violations)
+                violations_per_rep.setdefault(rep_idx, []).extend(violations)
 
             # Stage 5: Aggregate results
             if progress_callback:
                 progress_callback(95, "Generating summary")
 
+            rep_violations = self._check_reps(user_poses, segments, exercise_name)
+            for rep_idx, rom_violations in rep_violations.items():
+                violations_per_rep.setdefault(rep_idx, []).extend(rom_violations)
+
             avg_score = total_score / len(frame_results) if frame_results else 0
+            avg_score = self._blend_rep_error(avg_score, rep_violations, len(segments), exercise_name)
             reps = len(segments)
 
-            feedback_summary = self._generate_summary(exercise_name, avg_score, reps, violations_per_rep)
-            technical_details = self._generate_technical_details(violations_per_rep)
+            feedback_summary = self._generate_summary(
+                exercise_name, avg_score, reps, violations_per_rep,
+                detected_share=self._detected_share(user_poses),
+            )
+            technical_details = self._generate_technical_details(violations_per_rep, reps)
 
             processing_time = time.time() - start_time
 
@@ -219,7 +227,7 @@ class MLPipeline:
         progress_callback: Optional[callable] = None,
         task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Analyze user video without trainer reference (self-consistency check)."""
+        """Analyze user video without trainer reference (rule-based checks only)."""
         start_time = time.time()
 
         try:
@@ -236,25 +244,20 @@ class MLPipeline:
             if progress_callback:
                 progress_callback(50, "Analyzing form")
 
-            # Analyze each frame against ideal form rules
             frame_results = []
             total_score = 0
+            violations_per_rep: Dict[int, List] = {}
 
-            user_visibilities = np.array([p["visibility"] for p in user_poses])
-            segments = self.dtw_aligner.segment_repetitions(
-                np.array([p["embedding"] for p in user_poses]),
-                user_visibilities,
-                exercise_name
-            )
+            segments = self._segment_reps(user_poses, exercise_name)
 
             for i, user_pose in enumerate(user_poses):
                 if progress_callback and i % max(1, len(user_poses) // 20) == 0:
                     progress = 50 + int(40 * i / len(user_poses))
                     progress_callback(progress, f"Analyzing frame {i+1}/{len(user_poses)}")
 
-                user_angles = compute_joint_angles(user_pose["landmarks"])
+                user_angles = user_pose["angles"]
 
-                # Score using rule-based only (no trainer comparison)
+                # Score using rule-based checks only (no trainer comparison)
                 rule_score, violations = self.rule_scorer.score_frame(
                     exercise_name, user_angles, {}
                 )
@@ -275,11 +278,22 @@ class MLPipeline:
                 frame_results.append(frame_result)
                 total_score += rule_score
 
+                rep_idx = self._find_rep_index(user_pose["frame_idx"], segments)
+                violations_per_rep.setdefault(rep_idx, []).extend(violations)
+
+            rep_violations = self._check_reps(user_poses, segments, exercise_name)
+            for rep_idx, rom_violations in rep_violations.items():
+                violations_per_rep.setdefault(rep_idx, []).extend(rom_violations)
+
             avg_score = total_score / len(frame_results) if frame_results else 0
+            avg_score = self._blend_rep_error(avg_score, rep_violations, len(segments), exercise_name)
             reps = len(segments)
 
-            feedback_summary = self._generate_summary(exercise_name, avg_score, reps, {})
-            technical_details = self._generate_technical_details({})
+            feedback_summary = self._generate_summary(
+                exercise_name, avg_score, reps, violations_per_rep,
+                detected_share=self._detected_share(user_poses),
+            )
+            technical_details = self._generate_technical_details(violations_per_rep, reps)
 
             processing_time = time.time() - start_time
 
@@ -339,21 +353,83 @@ class MLPipeline:
         for idx, frame in enumerate(frames):
             landmarks, visibility, meta = self.pose_estimator.estimate(frame)
 
-            # Create pose embedding (flattened visible landmarks)
-            embedding = np.zeros(99, dtype=np.float32)
-            for i in range(33):
-                if visibility[i] > 0.5:
-                    embedding[i*3:(i+1)*3] = landmarks[i]
-
             results.append({
                 "frame_idx": idx,
                 "landmarks": landmarks,
                 "visibility": visibility,
-                "embedding": embedding,
+                # Person-relative embedding (hip-centred, torso lengths) for alignment
+                "embedding": pose_embedding(landmarks, visibility),
+                # Joint angles; joints that are not clearly visible are left out
+                "angles": compute_joint_angles(landmarks, visibility),
                 "meta": meta,
             })
 
         return results
+
+    def _segment_reps(self, poses: List[Dict], exercise_name: str) -> List[Tuple[int, int]]:
+        """Split the user's sequence into repetitions.
+
+        Exercises with a defined rep signal (e.g. knee angle for squats) are counted from
+        that joint-angle cycle. Others fall back to a generic movement-based heuristic.
+        """
+        signal_spec = get_profile(exercise_name).rep_signal
+        if signal_spec is not None:
+            series = np.array([
+                v if (v := joint_value(p["angles"], signal_spec.joint)) is not None else np.nan
+                for p in poses
+            ])
+            return self.dtw_aligner.segment_repetitions_by_signal(
+                series, extreme=signal_spec.extreme
+            )
+
+        return self.dtw_aligner.segment_repetitions(
+            np.array([p["embedding"] for p in poses]),
+            np.array([p["visibility"] for p in poses]),
+            exercise_name,
+        )
+
+    def _check_reps(
+        self,
+        poses: List[Dict],
+        segments: List[Tuple[int, int]],
+        exercise_name: str,
+    ) -> Dict[int, List[Dict]]:
+        """Range-of-motion violations per repetition, keyed by rep index."""
+        found: Dict[int, List[Dict]] = {}
+        for rep_idx, (start, end) in enumerate(segments):
+            rep_angles = [p["angles"] for p in poses[start : end + 1]]
+            violations = self.rule_scorer.check_repetition(exercise_name, rep_angles)
+            if violations:
+                found[rep_idx] = violations
+        return found
+
+    def _blend_rep_error(
+        self,
+        avg_frame_error: float,
+        rep_violations: Dict[int, List[Dict]],
+        num_reps: int,
+        exercise_name: str,
+    ) -> float:
+        """Fold range-of-motion misses into the overall error.
+
+        Frame scores cannot see e.g. "never reached depth", because every individual
+        frame may look fine. Each rep's error is its worst ROM miss; the overall error is
+        the average of frame error and mean rep error.
+        """
+        if num_reps == 0 or not get_profile(exercise_name).rom:
+            return avg_frame_error
+        rep_errors = [
+            100 * max((v["severity"] for v in rep_violations.get(i, [])), default=0.0)
+            for i in range(num_reps)
+        ]
+        return 0.5 * avg_frame_error + 0.5 * float(np.mean(rep_errors))
+
+    @staticmethod
+    def _detected_share(poses: List[Dict]) -> float:
+        """Share of frames where at least one joint angle could be measured."""
+        if not poses:
+            return 0.0
+        return sum(1 for p in poses if p["angles"]) / len(poses)
 
     def _find_rep_index(self, frame_idx: int, segments: List[Tuple[int, int]]) -> int:
         """Find which rep segment a frame belongs to."""
@@ -369,6 +445,9 @@ class MLPipeline:
         trainer_angles: Dict[str, float],
     ) -> str:
         """Generate human-readable feedback from violations."""
+        if not user_angles:
+            return "Pose not clearly visible in this frame."
+
         if not violations:
             return "Good form! Keep it up."
 
@@ -415,49 +494,79 @@ class MLPipeline:
         avg_score: float,
         reps: int,
         violations_per_rep: Dict[int, List],
+        detected_share: float = 1.0,
     ) -> str:
         """Generate overall feedback summary."""
+        if detected_share < MIN_DETECTED_SHARE:
+            return (
+                f"Could not reliably detect a person in most of the video "
+                f"({detected_share:.0%} of frames), so no form score was produced. "
+                "Make sure your whole body is in frame, well lit, and filmed from the side or front."
+            )
+
+        # A grade from frames alone is meaningless when no rep was found for an exercise
+        # that is counted in reps (e.g. the wrong exercise was selected, or the clip is
+        # too short / the person never moved through the full range).
+        if reps == 0 and get_profile(exercise_name).rep_signal is not None:
+            return (
+                f"No complete repetitions of {exercise_name} were detected, so no overall "
+                "form score was produced. Check the exercise selected and that the clip "
+                "shows full repetitions with your whole body in frame."
+            )
+
         score_desc = "excellent" if avg_score < 20 else \
                      "good" if avg_score < 40 else \
                      "needs improvement" if avg_score < 60 else \
                      "poor"
 
-        total_violations = sum(len(v) for v in violations_per_rep.values())
+        distinct_issues = {
+            (v["joint"], v["issue"])
+            for violations in violations_per_rep.values()
+            for v in violations
+        }
 
+        rep_text = f"Completed {reps} repetition(s) of {exercise_name}. " if reps else ""
         return (
-            f"Completed {reps} repetition(s) of {exercise_name}. "
-            f"Overall form score: {score_desc} ({100 - avg_score}/100). "
-            f"Detected {total_violations} form issue(s) across repetitions. "
-            f"Focus on the corrections below for improvement."
+            rep_text
+            + f"Overall form score: {score_desc} ({100 - avg_score:.0f}/100). "
+            + f"Found {len(distinct_issues)} distinct form issue(s). "
+            + "Focus on the corrections below for improvement."
         )
 
     def _generate_technical_details(
         self,
         violations_per_rep: Dict[int, List],
+        total_reps: int = 0,
     ) -> List[Dict]:
-        """Generate detailed technical corrections."""
+        """Aggregate violations into technical corrections, one per (joint, issue)."""
+        grouped: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for rep_idx, violations in violations_per_rep.items():
+            for v in violations:
+                entry = grouped.setdefault(
+                    (v["joint"], v["issue"]),
+                    {"reps": set(), "frames": 0, "severities": []},
+                )
+                if rep_idx >= 0:
+                    entry["reps"].add(rep_idx)
+                entry["frames"] += 1
+                entry["severities"].append(v["severity"])
+
+        ranked = sorted(
+            grouped.items(),
+            key=lambda item: float(np.mean(item[1]["severities"])) * max(len(item[1]["reps"]), 1),
+            reverse=True,
+        )
+
         details = []
-
-        # Aggregate violations by joint
-        joint_issues = {}
-        for rep_violations in violations_per_rep.values():
-            for v in rep_violations:
-                joint = v["joint"]
-                if joint not in joint_issues:
-                    joint_issues[joint] = []
-                joint_issues[joint].append(v)
-
-        for joint, issues in joint_issues.items():
-            # Get most common issue
-            from collections import Counter
-            issue_counts = Counter(v["issue"] for v in issues)
-            main_issue = issue_counts.most_common(1)[0][0]
-            avg_severity = np.mean([v["severity"] for v in issues])
-
+        for (joint, issue), entry in ranked[:8]:
+            avg_severity = float(np.mean(entry["severities"]))
+            if entry["reps"] and total_reps:
+                seen = f"seen in {len(entry['reps'])} of {total_reps} rep(s)"
+            else:
+                seen = f"seen in {entry['frames']} frame(s)"
             details.append({
-                "title": joint.replace("_", " ").title(),
-                "description": f"{main_issue} (occurred in {len(issues)} rep(s), "
-                              f"avg severity: {avg_severity:.1f}/1.0)",
+                "title": issue,
+                "description": f"{joint.replace('_', ' ').title()}: {seen}, avg severity {avg_severity:.1f}/1.0",
             })
 
         return details

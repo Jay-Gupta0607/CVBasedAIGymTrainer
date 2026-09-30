@@ -8,6 +8,11 @@ from scipy.spatial.distance import euclidean
 from fastdtw import fastdtw
 
 from app.services.pose_estimator import PoseEstimator
+from app.services.pose_features import (  # noqa: F401  (re-exported: existing import path)
+    compute_angle_differences,
+    compute_joint_angles,
+    pose_embedding,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +33,8 @@ class DTWAligner:
             frames: List of BGR frames
 
         Returns:
-            Embeddings array of shape (num_frames, 99) - 33 landmarks * 3 coords
+            Embeddings array of shape (num_frames, 99) - 33 landmarks * 3 coords,
+            hip-centred and in torso lengths (see pose_features.pose_embedding)
         """
         embeddings = []
         estimator = self.pose_estimator
@@ -37,18 +43,7 @@ class DTWAligner:
             try:
                 landmarks_3d, visibility, _ = estimator.estimate(frame)
 
-                # Only use landmarks with good visibility
-                mask = visibility > 0.5
-                if np.sum(mask) < 10:  # Not enough visible landmarks
-                    # Use zero embedding
-                    embeddings.append(np.zeros(99, dtype=np.float32))
-                    continue
-
-                # Flatten visible landmarks, pad invisible with zeros
-                embedding = np.zeros(99, dtype=np.float32)
-                for idx in range(33):
-                    if visibility[idx] > 0.5:
-                        embedding[idx*3:(idx+1)*3] = landmarks_3d[idx]
+                embedding = pose_embedding(landmarks_3d, visibility)
 
                 embeddings.append(embedding)
 
@@ -133,6 +128,57 @@ class DTWAligner:
 
         return correspondences
 
+    def segment_repetitions_by_signal(
+        self,
+        signal: np.ndarray,
+        extreme: str = "min",
+        min_prominence: float = 25.0,
+        min_distance: int = 8,
+        smooth_window: int = 5,
+    ) -> List[Tuple[int, int]]:
+        """Split a sequence into repetitions using a joint-angle time series.
+
+        One repetition = one cycle of the signal, counted at its working extreme (e.g.
+        the knee-angle minimum at the bottom of a squat). Unlike movement-speed minima,
+        which occur at both turning points of a rep, this counts each rep once.
+
+        Args:
+            signal: per-frame angle in degrees; NaN where not measured
+            extreme: "min" if the rep is counted at the angle's lowest point, else "max"
+            min_prominence: how far (degrees) the angle must swing to count as a rep
+            min_distance: minimum frames between two reps
+            smooth_window: moving-average window (frames) applied before peak finding
+
+        Returns:
+            One (start, end) frame window per repetition, in order. Windows meet at the
+            midpoints between consecutive extremes and cover the whole sequence.
+        """
+        from scipy.signal import find_peaks
+
+        x = np.asarray(signal, dtype=float)
+        valid = np.isfinite(x)
+        if valid.sum() < max(10, smooth_window):
+            return []
+
+        # Fill gaps by interpolation so a few unmeasured frames don't split a rep
+        idx = np.arange(len(x))
+        x = np.interp(idx, idx[valid], x[valid])
+
+        if smooth_window > 1:
+            pad = smooth_window // 2
+            padded = np.pad(x, pad, mode="edge")
+            x = np.convolve(padded, np.ones(smooth_window) / smooth_window, mode="valid")
+
+        oriented = -x if extreme == "min" else x
+        peaks, _ = find_peaks(oriented, prominence=min_prominence, distance=min_distance)
+        if len(peaks) == 0:
+            return []
+
+        bounds = [0] + [int((peaks[i] + peaks[i + 1]) // 2) for i in range(len(peaks) - 1)] + [len(x) - 1]
+        segments = [(bounds[i], bounds[i + 1]) for i in range(len(peaks))]
+        logger.info(f"Detected {len(segments)} repetitions from joint-angle signal ({extreme})")
+        return segments
+
     def segment_repetitions(
         self,
         embeddings: np.ndarray,
@@ -189,81 +235,3 @@ class DTWAligner:
 
         logger.info(f"Detected {len(segments)} repetitions for {exercise_name}")
         return segments
-
-
-def compute_joint_angles(landmarks_3d: np.ndarray) -> dict:
-    """Compute key joint angles from 3D landmarks.
-
-    Args:
-        landmarks_3d: (33, 3) array of 3D landmarks
-
-    Returns:
-        Dictionary of joint angles in degrees
-    """
-    def angle_between(p1, p2, p3):
-        """Angle at p2 formed by p1-p2-p3."""
-        v1 = p1 - p2
-        v2 = p3 - p2
-        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-8)
-        return np.degrees(np.arccos(np.clip(cos_angle, -1, 1)))
-
-    angles = {}
-
-    # Key joint angles for exercises
-    # Left arm
-    angles['left_elbow'] = angle_between(
-        landmarks_3d[11], landmarks_3d[13], landmarks_3d[15]
-    )
-    angles['left_shoulder'] = angle_between(
-        landmarks_3d[13], landmarks_3d[11], landmarks_3d[23]
-    )
-
-    # Right arm
-    angles['right_elbow'] = angle_between(
-        landmarks_3d[12], landmarks_3d[14], landmarks_3d[16]
-    )
-    angles['right_shoulder'] = angle_between(
-        landmarks_3d[14], landmarks_3d[12], landmarks_3d[24]
-    )
-
-    # Left leg
-    angles['left_knee'] = angle_between(
-        landmarks_3d[23], landmarks_3d[25], landmarks_3d[27]
-    )
-    angles['left_hip'] = angle_between(
-        landmarks_3d[25], landmarks_3d[23], landmarks_3d[11]
-    )
-
-    # Right leg
-    angles['right_knee'] = angle_between(
-        landmarks_3d[24], landmarks_3d[26], landmarks_3d[28]
-    )
-    angles['right_hip'] = angle_between(
-        landmarks_3d[26], landmarks_3d[24], landmarks_3d[12]
-    )
-
-    # Torso
-    angles['torso_lean'] = angle_between(
-        landmarks_3d[11], landmarks_3d[23], landmarks_3d[24]
-    )
-
-    return angles
-
-
-def compute_angle_differences(
-    user_angles: dict,
-    trainer_angles: dict,
-) -> dict:
-    """Compute differences between user and trainer joint angles.
-
-    Args:
-        user_angles: User joint angles
-        trainer_angles: Trainer joint angles
-
-    Returns:
-        Dictionary of angle differences
-    """
-    return {
-        joint: abs(user_angles.get(joint, 0) - trainer_angles.get(joint, 0))
-        for joint in set(user_angles) | set(trainer_angles)
-    }
