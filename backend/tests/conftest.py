@@ -101,6 +101,33 @@ async def async_client(app) -> AsyncGenerator[AsyncClient, None]:
         yield ac
 
 
+@pytest_asyncio.fixture(scope="function")
+async def isolated_client(db_engine) -> AsyncGenerator[AsyncClient, None]:
+    """Async client whose every request gets its own session (closed => rolled back).
+
+    Mirrors the real `get_db_session` dependency, so work that is flushed but never
+    committed is lost between requests. The shared-session `async_client` hides that.
+    """
+    from app.api.deps import get_db_session
+
+    factory = async_sessionmaker(
+        db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
+    )
+
+    async def override_get_db():
+        async with factory() as session:
+            try:
+                yield session
+            finally:
+                await session.close()
+
+    test_app = create_app()
+    test_app.dependency_overrides[get_db_session] = override_get_db
+
+    async with AsyncClient(app=test_app, base_url="http://test") as ac:
+        yield ac
+
+
 @pytest.fixture
 def mock_pose_estimator():
     """Mock pose estimator for testing."""

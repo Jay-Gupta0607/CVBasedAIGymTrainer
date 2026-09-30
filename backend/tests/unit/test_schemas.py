@@ -9,7 +9,7 @@ from app.schemas.analysis import (
     AnalysisCreateResponse,
     AnalysisStatusResponse,
 )
-from app.schemas.auth import UserLoginRequest, UserSignupRequest, TokenResponse
+from app.schemas.auth import UserLoginRequest, UserSignupRequest, TokenResponse, UserResponse
 from app.schemas.chat import ChatRequest, ChatResponse, ChatMessage
 
 
@@ -20,29 +20,35 @@ class TestAnalysisSchemas:
         """Test valid AnalysisFrame."""
         frame = AnalysisFrame(
             frame_id=0,
-            error_score=15.5,
+            error_score=15,
             feedback="Good form!",
             technical_observation="Knees tracking well",
-            user_image_key="s3://bucket/frame.jpg",
-            trainer_image_key="s3://bucket/trainer_frame.jpg",
-            joint_angles={"left_knee": 95.0, "right_knee": 93.0},
-            pose_landmarks=[{"x": 0.5, "y": 0.5, "z": 0.0, "visibility": 0.9}] * 33,
+            user_image_url="http://minio/frames/t/0_user.jpg",
+            trainer_image_url="http://minio/frames/t/0_trainer.jpg",
         )
         assert frame.frame_id == 0
-        assert frame.error_score == 15.5
+        assert frame.error_score == 15
+        assert frame.user_image_url.endswith("0_user.jpg")
+        assert frame.trainer_image_url.endswith("0_trainer.jpg")
 
     def test_analysis_frame_minimal(self):
         """Test AnalysisFrame with minimal fields."""
         frame = AnalysisFrame(
             frame_id=0,
-            error_score=15.5,
+            error_score=15,
             feedback="Good form!",
             technical_observation="Knees tracking well",
         )
-        assert frame.user_image_key is None
-        assert frame.trainer_image_key is None
-        assert frame.joint_angles is None
-        assert frame.pose_landmarks is None
+        assert frame.user_image_url is None
+        assert frame.trainer_image_url is None
+        # legacy base64 fields default to empty (pre-S3 analyses)
+        assert frame.user_image == ""
+        assert frame.trainer_image == ""
+
+    def test_analysis_frame_score_bounds(self):
+        for bad in (-1, 101):
+            with pytest.raises(ValidationError):
+                AnalysisFrame(frame_id=0, error_score=bad, feedback="x", technical_observation="y")
 
     def test_analysis_response_valid(self):
         """Test valid AnalysisResponse."""
@@ -50,14 +56,16 @@ class TestAnalysisSchemas:
             analysis=[
                 AnalysisFrame(
                     frame_id=0,
-                    error_score=15.5,
+                    error_score=15,
                     feedback="Good form!",
                     technical_observation="Knees tracking well",
                 )
             ],
             reps=3,
             feedback_summary="Overall good form",
-            technical_details=["Rep 1: Depth 95°", "Rep 2: Depth 92°"],
+            technical_details=[
+                {"title": "Left Knee", "description": "Insufficient depth (occurred in 2 rep(s))"},
+            ],
         )
         assert len(response.analysis) == 1
         assert response.reps == 3
@@ -125,10 +133,22 @@ class TestAuthSchemas:
         response = TokenResponse(
             access_token="access_token",
             refresh_token="refresh_token",
-            user={"id": "123", "email": "test@example.com", "full_name": "Test User", "is_active": True, "is_verified": True, "created_at": "2024-01-01T00:00:00Z"}
+            user={
+                "id": "6f1f8f0e-5b0a-4a43-9f3e-1d2f6f7a9c11",
+                "email": "test@example.com",
+                "full_name": "Test User",
+                "role": "user",
+                "is_active": True,
+                "created_at": "2024-01-01T00:00:00Z",
+            },
         )
         assert response.access_token == "access_token"
         assert response.refresh_token == "refresh_token"
+        assert response.user.email == "test@example.com"
+
+    def test_token_response_user_is_optional(self):
+        response = TokenResponse(access_token="a", refresh_token="r")
+        assert response.user is None
 
 
 class TestChatSchemas:

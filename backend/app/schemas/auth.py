@@ -13,11 +13,6 @@ class Token(BaseModel):
     token_type: str = "bearer"
 
 
-class TokenResponse(Token):
-    """Token response with user info."""
-    pass
-
-
 class TokenData(BaseModel):
     """Token payload data."""
     sub: Optional[str] = None
@@ -84,3 +79,8 @@ class UserResponse(UserBase):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class TokenResponse(Token):
+    """Token response with user info."""
+    user: Optional[UserResponse] = None

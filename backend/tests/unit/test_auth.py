@@ -153,3 +153,52 @@ class TestAuthEndpoints:
         data = response.json()
         assert data["email"] == "test@example.com"
         assert data["full_name"] == "Test User"
+
+
+class TestRefreshTokenPersistence:
+    """Refresh/logout must commit: they run on a per-request session that is rolled back."""
+
+    @staticmethod
+    async def _signup(client: AsyncClient) -> dict:
+        response = await client.post(
+            "/api/v1/auth/signup",
+            json={"email": "rot@example.com", "password": "TestPass123!", "full_name": "Rot Ate"},
+        )
+        assert response.status_code == 201
+        return response.json()
+
+    @pytest.mark.asyncio
+    async def test_signup_returns_user(self, isolated_client: AsyncClient):
+        data = await self._signup(isolated_client)
+        assert data["user"]["email"] == "rot@example.com"
+
+    @pytest.mark.asyncio
+    async def test_refresh_rotates_and_persists(self, isolated_client: AsyncClient):
+        first = (await self._signup(isolated_client))["refresh_token"]
+
+        rotated = await isolated_client.post("/api/v1/auth/refresh", json={"refresh_token": first})
+        assert rotated.status_code == 200
+        second = rotated.json()["refresh_token"]
+        assert second != first
+
+        # The old token is revoked and the new one is actually stored.
+        replay = await isolated_client.post("/api/v1/auth/refresh", json={"refresh_token": first})
+        assert replay.status_code == 401
+        again = await isolated_client.post("/api/v1/auth/refresh", json={"refresh_token": second})
+        assert again.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_logout_revokes_refresh_token(self, isolated_client: AsyncClient):
+        tokens = await self._signup(isolated_client)
+
+        out = await isolated_client.post(
+            "/api/v1/auth/logout",
+            json={"refresh_token": tokens["refresh_token"]},
+            headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        )
+        assert out.status_code == 200
+
+        reuse = await isolated_client.post(
+            "/api/v1/auth/refresh", json={"refresh_token": tokens["refresh_token"]}
+        )
+        assert reuse.status_code == 401

@@ -64,17 +64,17 @@ async def create_analysis(
             raise HTTPException(400, f"{name}: No filename provided")
 
         ext = Path(video.filename).suffix.lower()
-        if ext not in settings.SUPPORTED_VIDEO_FORMATS:
-            raise HTTPException(400, f"{name}: Unsupported format. Use: {settings.SUPPORTED_VIDEO_FORMATS}")
+        if ext not in settings.supported_video_formats_list:
+            raise HTTPException(400, f"{name}: Unsupported format. Use: {settings.supported_video_formats_list}")
 
     # Check file sizes - stream and validate to prevent memory exhaustion
     max_size_mb = settings.MAX_VIDEO_SIZE_MB
     trainer_content = await read_file_with_size_limit(trainer_video, max_size_mb)
     user_content = await read_file_with_size_limit(user_video, max_size_mb)
 
-    # Validate exercise_name against enum
+    # Validate exercise_name against enum and use the canonical value from here on
     try:
-        ExerciseType(exercise_name)
+        exercise_name = ExerciseType.parse(exercise_name).value
     except ValueError:
         valid_exercises = [e.value for e in ExerciseType]
         raise HTTPException(400, f"Invalid exercise_name. Valid options: {valid_exercises}")
@@ -245,15 +245,15 @@ async def create_analysis_no_trainer(
         raise HTTPException(400, "No filename provided")
 
     ext = Path(user_video.filename).suffix.lower()
-    if ext not in settings.SUPPORTED_VIDEO_FORMATS:
-        raise HTTPException(400, f"Unsupported format. Use: {settings.SUPPORTED_VIDEO_FORMATS}")
+    if ext not in settings.supported_video_formats_list:
+        raise HTTPException(400, f"Unsupported format. Use: {settings.supported_video_formats_list}")
 
     # Stream and validate size to prevent memory exhaustion
     user_content = await read_file_with_size_limit(user_video, settings.MAX_VIDEO_SIZE_MB)
 
-    # Validate exercise_name against enum
+    # Validate exercise_name against enum and use the canonical value from here on
     try:
-        ExerciseType(exercise_name)
+        exercise_name = ExerciseType.parse(exercise_name).value
     except ValueError:
         valid_exercises = [e.value for e in ExerciseType]
         raise HTTPException(400, f"Invalid exercise_name. Valid options: {valid_exercises}")

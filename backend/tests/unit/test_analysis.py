@@ -44,6 +44,27 @@ class TestAnalysisEndpoints:
         assert "Unsupported format" in response.json()["detail"]
 
     @pytest.mark.asyncio
+    async def test_video_format_is_matched_exactly_not_by_substring(self, async_client: AsyncClient):
+        """".mp" is a substring of ".mp4,.mov,..." but is not a supported format."""
+        response = await async_client.post(
+            "/api/v1/analyze/no-trainer",
+            files={"user_video": ("test.mp", b"fake", "video/mp4")},
+            data={"exercise_name": "Squat", "email": "test@example.com"},
+        )
+        assert response.status_code == 400
+        assert "Unsupported format" in response.json()["detail"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_exercise_name_rejected(self, async_client: AsyncClient):
+        response = await async_client.post(
+            "/api/v1/analyze/no-trainer",
+            files={"user_video": ("test.mp4", b"fake", "video/mp4")},
+            data={"exercise_name": "burpee", "email": "test@example.com"},
+        )
+        assert response.status_code == 400
+        assert "Invalid exercise_name" in response.json()["detail"]
+
+    @pytest.mark.asyncio
     async def test_create_analysis_without_trainer_too_large(self, async_client: AsyncClient):
         """Test creating analysis with video too large."""
         # Create a large fake video (>500MB)

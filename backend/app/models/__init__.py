@@ -1,6 +1,7 @@
 """Database models."""
 
 import enum
+import re
 from datetime import datetime
 from typing import Optional, List
 from uuid import uuid4
@@ -61,6 +62,21 @@ class ExerciseType(str, enum.Enum):
     T_BAR_ROW = "T Bar Row"
     TRICEP_DIPS = "Tricep Dips"
     TRICEP_PUSHDOWN = "Tricep Pushdown"
+
+    @classmethod
+    def parse(cls, name: str) -> "ExerciseType":
+        """Resolve a user-supplied name to a member, ignoring case, spaces, '-' and '_'.
+
+        "squat", "Squat", "push_up" and "Push-up" all resolve; raises ValueError otherwise.
+        """
+        def key(text: str) -> str:
+            return re.sub(r"[^a-z0-9]", "", text.lower())
+
+        wanted = key(name)
+        for member in cls:
+            if wanted in (key(member.value), key(member.name)):
+                return member
+        raise ValueError(f"Unknown exercise: {name!r}")
 
 
 class User(Base):
