@@ -165,6 +165,30 @@ class VideoProcessor:
         _, buffer = cv2.imencode('.jpg', frame, encode_param)
         return base64.b64encode(buffer).decode('utf-8')
 
+    def encode_frame_jpeg(
+        self,
+        frame: np.ndarray,
+        max_width: int = 640,
+        quality: int = 72,
+    ) -> bytes:
+        """Downscale (if wider than max_width) and encode a frame as JPEG bytes.
+
+        Frames are displayed in the UI at ~300-400px wide, so capping width at
+        max_width keeps download and DB sizes small with no visible quality loss.
+        Returns raw JPEG bytes suitable for object-storage upload.
+        """
+        h, w = frame.shape[:2]
+        if w > max_width:
+            scale = max_width / w
+            resized = cv2.resize(frame, (max_width, int(round(h * scale))), interpolation=cv2.INTER_AREA)
+            frame = resized
+
+        encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        ok, buffer = cv2.imencode('.jpg', frame, encode_param)
+        if not ok:
+            raise ValueError("Failed to encode frame as JPEG")
+        return buffer.tobytes()
+
     def save_frames_as_base64(
         self,
         frames: List[np.ndarray],

@@ -14,8 +14,10 @@ class AnalysisFrame(BaseModel):
     error_score: int = Field(ge=0, le=100)
     feedback: str
     technical_observation: str
-    user_image: str  # base64 encoded
-    trainer_image: str  # base64 encoded
+    user_image: Optional[str] = ""  # legacy base64 (pre-S3 analyses)
+    trainer_image: Optional[str] = ""  # legacy base64 (pre-S3 analyses)
+    user_image_url: Optional[str] = None  # presigned MinIO URL (current analyses)
+    trainer_image_url: Optional[str] = None  # presigned MinIO URL (current analyses)
 
 
 # Analysis Response (matches frontend AnalysisResponse interface)

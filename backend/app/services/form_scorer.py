@@ -22,6 +22,7 @@ class FormScorer:
         self.output_name: Optional[str] = None
         self._initialized = False
         self._feature_names = self._get_feature_names()
+        self.expected_features: Optional[int] = None
 
     def _get_feature_names(self) -> List[str]:
         """Get feature names in correct order (matches training)."""
@@ -83,6 +84,13 @@ class FormScorer:
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
 
+        # Record the model's expected feature width. The runtime feature layout
+        # (273 features) diverged from the training layout used to build this ONNX
+        # (156 generic col_* features), so a mismatch must fall back to the dummy
+        # scorer rather than fail ONNX with an INVALID_ARGUMENT dimension error.
+        dims = self.session.get_inputs()[0].shape
+        self.expected_features = int(dims[1]) if len(dims) > 1 and dims[1] is not None else None
+
         logger.info(f"Form scorer loaded. Input: {self.input_name}, Output: {self.output_name}")
         self._initialized = True
 
@@ -94,7 +102,7 @@ class FormScorer:
         trainer_visibility: np.ndarray,  # (33,)
         user_angles: Dict[str, float],
         trainer_angles: Dict[str, float],
-    ) -> np.ndarray:
+    ) -> Optional[np.ndarray]:
         """Prepare feature vector for scoring.
 
         Args:
@@ -106,7 +114,7 @@ class FormScorer:
             trainer_angles: Trainer joint angles
 
         Returns:
-            Feature vector (1, n_features)
+            Feature vector (1, n_features), or None if feature layout mismatches the model
         """
         features = []
 
@@ -132,7 +140,18 @@ class FormScorer:
         features.extend(user_visibility.tolist())
         features.extend(trainer_visibility.tolist())
 
-        return np.array(features, dtype=np.float32).reshape(1, -1)
+        vec = np.array(features, dtype=np.float32).reshape(1, -1)
+
+        # Guard against model/runtime feature-layout drift: returning None signals
+        # score_frame to use the dummy scorer instead of a hard ONNX dimension error.
+        if self.expected_features is not None and vec.shape[1] != self.expected_features:
+            logger.warning(
+                f"Form scorer feature mismatch: built {vec.shape[1]} features, "
+                f"model expects {self.expected_features}. Falling back to dummy scorer."
+            )
+            return None
+
+        return vec
 
     def score_frame(
         self,
@@ -160,6 +179,9 @@ class FormScorer:
             trainer_landmarks, trainer_visibility,
             user_angles, trainer_angles
         )
+
+        if features is None:
+            return self._dummy_score(user_landmarks, user_visibility, trainer_landmarks, trainer_visibility)
 
         # Run inference
         output = self.session.run([self.output_name], {self.input_name: features})[0]

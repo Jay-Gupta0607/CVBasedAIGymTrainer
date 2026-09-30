@@ -51,9 +51,10 @@ class MLPipeline:
         self.video_processor = video_processor or get_video_processor()
         self.storage = get_storage_service()
 
-        # Initialize all components
+        # Initialize pose + scorer for analysis. DWPose is deliberately lazy:
+        # it's only needed for pose-transfer (and dwpose.onnx is optional), so
+        # it self-initializes on first estimate() instead of blocking analysis.
         self.pose_estimator.initialize()
-        self.dwpose_estimator.initialize()
         self.form_scorer.initialize()
 
     def analyze_with_trainer(
@@ -62,6 +63,7 @@ class MLPipeline:
         trainer_video_path: str,
         exercise_name: str,
         progress_callback: Optional[callable] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Analyze user video against trainer reference.
 
@@ -152,12 +154,13 @@ class MLPipeline:
                 # Combine scores (use ML score as primary, rule as validation)
                 final_score = error_score
 
-                # Encode images as base64
+                # Encode + upload downscaled frame images to object storage. Keep
+                # S3 keys (not base64) so status/history payloads stay tiny.
                 user_frame = user_frames[user_pose["frame_idx"]]
                 trainer_frame = trainer_frames[trainer_pose["frame_idx"]]
 
-                user_image_b64 = self.video_processor.save_frame_as_base64(user_frame)
-                trainer_image_b64 = self.video_processor.save_frame_as_base64(trainer_frame)
+                user_image_key = self._store_frame_image(user_frame, task_id, user_pose["frame_idx"], "user")
+                trainer_image_key = self._store_frame_image(trainer_frame, task_id, trainer_pose["frame_idx"], "trainer")
 
                 frame_result = {
                     "frame_id": user_pose["frame_idx"],
@@ -166,8 +169,8 @@ class MLPipeline:
                     "technical_observation": self._generate_technical_obs(
                         user_angles, trainer_angles, violations
                     ),
-                    "user_image": user_image_b64,
-                    "trainer_image": trainer_image_b64,
+                    "user_image_key": user_image_key,
+                    "trainer_image_key": trainer_image_key,
                     "joint_angles": user_angles,
                     "angle_differences": compute_angle_differences(user_angles, trainer_angles),
                 }
@@ -214,6 +217,7 @@ class MLPipeline:
         user_video_path: str,
         exercise_name: str,
         progress_callback: Optional[callable] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Analyze user video without trainer reference (self-consistency check)."""
         start_time = time.time()
@@ -256,7 +260,7 @@ class MLPipeline:
                 )
 
                 user_frame = user_frames[user_pose["frame_idx"]]
-                user_image_b64 = self.video_processor.save_frame_as_base64(user_frame)
+                user_image_key = self._store_frame_image(user_frame, task_id, user_pose["frame_idx"], "user")
 
                 frame_result = {
                     "frame_id": user_pose["frame_idx"],
@@ -265,8 +269,7 @@ class MLPipeline:
                     "technical_observation": self._generate_technical_obs(
                         user_angles, {}, violations
                     ),
-                    "user_image": user_image_b64,
-                    "trainer_image": "",  # No trainer
+                    "user_image_key": user_image_key,
                     "joint_angles": user_angles,
                 }
                 frame_results.append(frame_result)
@@ -295,6 +298,35 @@ class MLPipeline:
         except Exception as e:
             logger.error(f"Analysis failed: {e}", exc_info=True)
             raise
+
+    def _store_frame_image(
+        self,
+        frame: np.ndarray,
+        task_id: Optional[str],
+        frame_id: int,
+        side: str,
+    ) -> str:
+        """Downscale, JPEG-encode, and upload a frame image to object storage.
+
+        Args:
+            frame: BGR image to store
+            task_id: Analysis task id used as the S3 key namespace
+            frame_id: Frame index within the analysis
+            side: "user" or "trainer"
+
+        Returns:
+            S3 object key (frames/<task_id>/<frame_id>_<side>.jpg)
+        """
+        if not task_id:
+            raise ValueError(
+                "task_id is required for frame storage — "
+                "without it, frame images are inaccessible via the proxy endpoint."
+            )
+        uid = task_id
+        key = f"frames/{uid}/{frame_id}_{side}.jpg"
+        jpeg = self.video_processor.encode_frame_jpeg(frame)
+        self.storage.upload_bytes(jpeg, key, "image/jpeg")
+        return key
 
     def _estimate_poses_batch(
         self,
@@ -463,8 +495,14 @@ class MLPipeline:
             if progress_callback:
                 progress_callback(30, "Extracting poses (DWPose)")
 
-            user_kpts, user_scores, user_meta = self.dwpose_estimator.estimate(user_frame)
-            trainer_kpts, trainer_scores, trainer_meta = self.dwpose_estimator.estimate(trainer_frame)
+            try:
+                user_kpts, user_scores, user_meta = self.dwpose_estimator.estimate(user_frame)
+                trainer_kpts, trainer_scores, trainer_meta = self.dwpose_estimator.estimate(trainer_frame)
+            except FileNotFoundError as e:
+                raise ValueError(
+                    f"DWPose model not available: {e}. "
+                    "Run `python backend/scripts/download_dwpose.py` to download the model."
+                ) from e
 
             # Stage 3: Align directions
             if progress_callback:
@@ -593,15 +631,16 @@ async def run_full_analysis(
     exercise_name: str,
     email: str,
     progress_callback: Optional[callable] = None,
+    task_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Convenience function to run full analysis."""
     pipeline = MLPipeline()
 
     if trainer_video_path:
         return pipeline.analyze_with_trainer(
-            user_video_path, trainer_video_path, exercise_name, progress_callback
+            user_video_path, trainer_video_path, exercise_name, progress_callback, task_id
         )
     else:
         return pipeline.analyze_without_trainer(
-            user_video_path, exercise_name, progress_callback
+            user_video_path, exercise_name, progress_callback, task_id
         )

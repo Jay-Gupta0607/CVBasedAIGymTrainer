@@ -121,9 +121,9 @@ class PoseEstimator:
             frame: BGR image (H, W, 3) from OpenCV
 
         Returns:
-            Preprocessed tensor (1, 3, 256, 256) for MediaPipe
+            Preprocessed tensor (1, 256, 256, 3) for MediaPipe (NHWC, [0, 1])
         """
-        # MediaPipe expects RGB, 256x256, normalized to [-1, 1]
+        # MediaPipe BlazePose expects RGB, 256x256, normalized to [0, 1], NHWC
         h, w = frame.shape[:2]
         size = max(h, w)
 
@@ -139,14 +139,11 @@ class PoseEstimator:
         # BGR to RGB
         rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
 
-        # Normalize to [-1, 1]
-        normalized = (rgb.astype(np.float32) / 127.5) - 1.0
+        # Normalize to [0, 1] (the landmark model's TFLite input normalization)
+        normalized = (rgb.astype(np.float32) / 255.0)
 
-        # HWC to CHW
-        chw = np.transpose(normalized, (2, 0, 1))
-
-        # Add batch dimension
-        return np.expand_dims(chw, axis=0)
+        # Add batch dimension (keep NHWC layout — the raw .tflite export wants it)
+        return np.expand_dims(normalized, axis=0)
 
     def postprocess(
         self,
@@ -156,37 +153,39 @@ class PoseEstimator:
         """Postprocess model outputs.
 
         Args:
-            outputs: Model outputs [landmarks, presence, segmentation]
+            outputs: Model outputs [landmarks_flat, presence, segmentation, ...]
+                     landmarks_flat: (1, 195) = 39 landmarks × 5 (x,y,z,vis,pres)
             original_shape: (height, width) of original frame
 
         Returns:
             Tuple of (landmarks_3d, visibility)
-            landmarks_3d: (33, 3) - x, y, z in original image coordinates
+            landmarks_3d: (33, 3) - x, y, z in original image coordinates (first 33 of 39)
             visibility: (33,) - visibility score for each landmark
         """
-        # MediaPipe outputs: landmarks (1, 33, 4), presence (1, 33, 1), segmentation (1, 256, 256)
-        landmarks = outputs[0][0]  # (33, 4) - x, y, z, visibility
-        presence = outputs[1][0] if len(outputs) > 1 else None
+        # Raw output: (1, 195) = 39 × 5 values
+        landmarks_flat = outputs[0][0]  # (195,)
+        landmarks = landmarks_flat.reshape(39, 5)  # (39, 5): x, y, z, visibility, presence
+
+        # Take only first 33 (body landmarks, skip 6 hand landmarks)
+        landmarks = landmarks[:33]  # (33, 5)
 
         h, w = original_shape
 
-        # Extract 3D coordinates (normalized 0-1)
-        x = landmarks[:, 0]
-        y = landmarks[:, 1]
-        z = landmarks[:, 2]
-        visibility = landmarks[:, 3]
+        # Extract coordinates (already in absolute pixel coordinates from the model)
+        x = landmarks[:, 0]  # absolute x
+        y = landmarks[:, 1]  # absolute y
+        z = landmarks[:, 2]  # depth
+        visibility = landmarks[:, 3]  # confidence
 
-        # Convert to original image coordinates
-        # Account for padding
+        # Coordinates are in 256x256 space; scale back to original image
+        # The model outputs in the padded 256x256 space
         size = max(h, w)
-        x = (x * size) / w
-        y = (y * size) / h
+        x_offset = (size - w) / 2
+        y_offset = (size - h) / 2
 
-        # Adjust for padding offset
-        x_offset = (size - w) / (2 * size)
-        y_offset = (size - h) / (2 * size)
-        x = (x - x_offset) * w
-        y = (y - y_offset) * h
+        # Remove padding offset and scale to original image
+        x = (x - x_offset) * w / size
+        y = (y - y_offset) * h / size
 
         # Clamp to image bounds
         x = np.clip(x, 0, w - 1)

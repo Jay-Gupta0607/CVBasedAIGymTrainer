@@ -2,8 +2,9 @@
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import asynccontextmanager
-from typing import Optional, BinaryIO
+from typing import Optional, BinaryIO, List, Dict
 from uuid import uuid4
 
 import boto3
@@ -152,6 +153,49 @@ class StorageService:
             if "Contents" in page:
                 files.extend([obj["Key"] for obj in page["Contents"]])
         return files
+
+    def generate_presigned_urls_batch(
+        self,
+        keys: List[str],
+        expiration: int = 3600,
+        max_workers: int = 10,
+    ) -> Dict[str, str]:
+        """Generate presigned URLs for multiple keys in parallel.
+
+        Args:
+            keys: List of S3 object keys
+            expiration: URL expiration in seconds
+            max_workers: Max parallel workers
+
+        Returns:
+            Dict mapping key -> presigned URL (empty string on error)
+        """
+        def gen_one(key: str) -> tuple[str, str]:
+            try:
+                url = self.client.generate_presigned_url(
+                    ClientMethod="get_object",
+                    Params={"Bucket": settings.S3_BUCKET, "Key": key},
+                    ExpiresIn=expiration,
+                )
+                return (key, url)
+            except ClientError:
+                logger.warning(f"Failed to generate presigned URL for key: {key}")
+                return (key, "")
+            except Exception:
+                logger.warning(f"Unexpected error generating presigned URL for key: {key}", exc_info=True)
+                return (key, "")
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(gen_one, key) for key in keys]
+            for future in as_completed(futures):
+                try:
+                    key, url = future.result()
+                    results[key] = url
+                except Exception:
+                    logger.warning("Failed to get presigned URL result from thread pool", exc_info=True)
+
+        return results
 
 
 # Global instance

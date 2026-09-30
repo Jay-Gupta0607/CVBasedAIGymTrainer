@@ -60,6 +60,7 @@ def process_analysis(
                     trainer_video_path,
                     exercise_name,
                     progress_callback,
+                    task_id=task_id,
                 )
 
                 # Save frame analyses
@@ -146,6 +147,7 @@ def process_analysis_no_trainer(
                     user_video_path,
                     exercise_name,
                     progress_callback,
+                    task_id=task_id,
                 )
 
                 for frame_data in result_data["analysis"]:
