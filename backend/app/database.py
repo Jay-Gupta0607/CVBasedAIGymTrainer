@@ -74,7 +74,7 @@ async def get_db_context() -> AsyncGenerator[AsyncSession, None]:
 async def init_db() -> None:
     """Initialize database - create tables if they don't exist."""
     # Import all models to ensure they're registered
-    from app.models import user, analysis  # noqa: F401
+    from app.models import User, Analysis  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

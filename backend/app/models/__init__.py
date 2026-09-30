@@ -68,7 +68,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid4] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
-    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     full_name: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.USER, nullable=False)
@@ -102,7 +102,8 @@ class RefreshToken(Base):
     user_id: Mapped[uuid4] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    token_hash: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    token_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    token_key: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
@@ -169,7 +170,7 @@ class AnalysisFrame(Base):
 
     id: Mapped[uuid4] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid4)
     analysis_id: Mapped[uuid4] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("analyses.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(as_uuid=True), ForeignKey("analyses.id", ondelete="CASCADE"), nullable=False
     )
     frame_id: Mapped[int] = mapped_column(Integer, nullable=False)
     error_score: Mapped[int] = mapped_column(Integer, nullable=False)  # 0-100
