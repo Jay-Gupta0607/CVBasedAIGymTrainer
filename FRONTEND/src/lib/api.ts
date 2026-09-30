@@ -37,8 +37,10 @@ export interface AnalysisFrame {
   error_score: number;
   feedback: string;
   technical_observation: string;
-  user_image: string; // base64
-  trainer_image: string; // base64
+  user_image?: string; // legacy base64 (pre-S3 analyses)
+  trainer_image?: string; // legacy base64 (pre-S3 analyses)
+  user_image_url?: string; // presigned MinIO URL (current analyses)
+  trainer_image_url?: string; // presigned MinIO URL (current analyses)
 }
 
 export interface AnalysisResponse {
@@ -73,9 +75,16 @@ interface StatusResponse {
  */
 async function pollAnalysis(
   taskId: string,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  options?: { timeoutMs?: number; maxAttempts?: number }
 ): Promise<AnalysisResponse> {
+  const timeoutMs = options?.timeoutMs ?? 5 * 60 * 1000; // 5 minutes default
+  const maxAttempts = options?.maxAttempts ?? 150; // 150 * 2s = 5 min
+  const startTime = Date.now();
+  let attempt = 0;
+
   for (;;) {
+    attempt++;
     const response = await api.get<StatusResponse>(`${BASE_URL}/api/v1/analyze/${taskId}/status`);
     const data = response.data;
 
@@ -88,6 +97,14 @@ async function pollAnalysis(
     }
     if (data.status === "failed") {
       throw new Error(data.error_message || "Analysis failed");
+    }
+
+    // Timeout / max attempts guard
+    if (Date.now() - startTime >= timeoutMs) {
+      throw new Error("Analysis timed out. The job may still be running — check history later.");
+    }
+    if (attempt >= maxAttempts) {
+      throw new Error("Max polling attempts reached. The job may still be running — check history later.");
     }
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -172,6 +189,30 @@ export async function signupUser(email: string, password: string, fullName?: str
 export async function sendChatMessage(message: string) {
   const response = await api.post(CHAT_URL, { message });
   return response.data;
+}
+
+/**
+ * Turn an axios/fetch error into a human-readable message.
+ * FastAPI returns {"detail": "..."} on errors; a 503 from the image-generation
+ * endpoints specifically means the external service isn't configured.
+ */
+export function getErrorMessage(err: unknown): string {
+  const response = (err as { response?: { status?: number; data?: { detail?: string } } })?.response;
+
+  if (response?.status === 503) {
+    const detail = response.data?.detail ?? "";
+    if (/not configured/i.test(detail)) {
+      return (
+        "AI image generation isn't configured on this server yet. " +
+        "This feature needs a Modal deployment to be wired up — movement analysis still works."
+      );
+    }
+    return detail || "Service temporarily unavailable.";
+  }
+
+  const detail = response?.data?.detail;
+  if (detail) return detail;
+  return (err as Error)?.message || "Something went wrong.";
 }
 
 export async function generatePoseTransfer(
