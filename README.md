@@ -157,6 +157,32 @@ python backend/scripts/convert_lightgbm_to_onnx.py --create_sample --output_dir 
 #   SCORER_MODEL_PATH=./models/form_scorer.onnx
 ```
 
+## Tests
+
+```bash
+cd backend
+pip install -r requirements/dev.txt
+pytest tests/unit
+```
+
+The unit tests need no database server, Redis, MinIO or model files (they use in-memory SQLite and
+synthetic skeletons).
+
+## Verifying pose accuracy on your own footage
+
+The scoring is only as good as the pose model's output. To check `PoseEstimator` against
+MediaPipe's official landmarker on a real clip (e.g. a side-on squat), with the ONNX and `.task`
+models from the section above:
+
+```bash
+pip install -r backend/requirements/ml.txt
+python backend/scripts/verify_pose_decode.py squat.mp4 --every 5 --refine --overlay overlay.mp4
+```
+
+It reports landmark error (in torso lengths) and joint-angle differences against the reference,
+and writes an overlay (green = ours, red = MediaPipe). The exercise rules in
+`backend/app/services/exercise_rules.py` are lenient heuristic defaults; tune them on real footage.
+
 ## API Documentation
 
 ### Base URL
@@ -207,6 +233,10 @@ curl -X POST http://localhost:8000/api/v1/analyze \
 
 ### Status Polling Response
 
+`GET /analyze/{task_id}/status` requires `Authorization: Bearer <token>` (use the token from
+`/auth/login`). `exercise_name` is matched ignoring case, spaces, `-` and `_`
+(`squat`, `Push-up` and `push_up` all work).
+
 ```json
 {
   "task_id": "uuid",
@@ -218,73 +248,30 @@ curl -X POST http://localhost:8000/api/v1/analyze \
     "analysis": [
       {
         "frame_id": 0,
-        "error_score": 15.2,
-        "feedback": "Good depth! Keep knees tracking over toes.",
-        "technical_observation": "Left knee valgus 5°, Right knee neutral",
-        "user_image_key": "s3://gym-trainer/frames/user_frame_001.jpg",
-        "trainer_image_key": "s3://gym-trainer/frames/trainer_frame_001.jpg",
-        "joint_angles": {
-          "left_knee": 95,
-          "right_knee": 93,
-          "left_hip": 110,
-          "right_hip": 108,
-          "left_ankle": 85,
-          "right_ankle": 83
-        },
-        "pose_landmarks": [
-          {
-            "id": 0,
-            "name": "nose",
-            "x": 0.48,
-            "y": 0.25,
-            "z": -0.12,
-            "visibility": 0.99
-          },
-          {
-            "id": 23,
-            "name": "left_hip",
-            "x": 0.52,
-            "y": 0.61,
-            "z": -0.08,
-            "visibility": 0.97
-          },
-          {
-            "id": 24,
-            "name": "right_hip",
-            "x": 0.44,
-            "y": 0.61,
-            "z": -0.07,
-            "visibility": 0.98
-          },
-          {
-            "id": 25,
-            "name": "left_knee",
-            "x": 0.54,
-            "y": 0.82,
-            "z": 0.05,
-            "visibility": 0.96
-          },
-          {
-            "id": 26,
-            "name": "right_knee",
-            "x": 0.42,
-            "y": 0.81,
-            "z": 0.04,
-            "visibility": 0.97
-          }
-        ]
+        "error_score": 15,
+        "feedback": "Knee: Insufficient depth.",
+        "technical_observation": "Left Knee: 112.0° (target: 92.0°) [Δ20.0°]",
+        "user_image_url": "http://localhost:9000/gym-trainer/frames/<task_id>/0_user.jpg?X-Amz-...",
+        "trainer_image_url": "http://localhost:9000/gym-trainer/frames/<task_id>/0_trainer.jpg?X-Amz-..."
       }
     ],
     "reps": 3,
-    "feedback_summary": "Overall good form. Minor knee valgus on left side during ascent.",
+    "feedback_summary": "Completed 3 repetition(s) of Squat. Overall form score: good (72/100). Found 2 distinct form issue(s). Focus on the corrections below for improvement.",
     "technical_details": [
-      "Rep 1: Depth 95°, Tempo 2.1s, Knee valgus L:5° R:2°",
-      "Rep 2: Depth 92°, Tempo 2.3s, Knee valgus L:8° R:3°",
-      "Rep 3: Depth 94°, Tempo 2.2s, Knee valgus L:6° R:2°"
+      {
+        "title": "Insufficient depth",
+        "description": "Knee: seen in 2 of 3 rep(s), avg severity 0.4/1.0"
+      }
     ]
-  }
+  },
+  "trainer_video_url": "http://localhost:9000/gym-trainer/videos/...",
+  "user_video_url": "http://localhost:9000/gym-trainer/videos/..."
 }
 ```
+
+`error_score` is an integer from 0 (matches the trainer / good form) to 100. `user_image` and
+`trainer_image` (legacy base64) are only populated for analyses created before frames moved to
+object storage.
 
 ## Model Conversion
 

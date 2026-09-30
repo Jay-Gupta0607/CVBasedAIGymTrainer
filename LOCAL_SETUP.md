@@ -66,34 +66,51 @@ The backend has two test videos already created:
 - `backend/test_user.mp4`
 - `backend/test_trainer.mp4`
 
-To test analysis:
+These only exercise the plumbing - there is no person in them. For a meaningful run, use real
+footage. Sign up once, log in for a token, then submit and poll (the token is required for
+polling, and sending it on the submit call ties the analysis to your account):
 
 ```bash
+curl -s -X POST http://localhost:8000/api/v1/auth/signup \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"<password>","full_name":"You"}'
+
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"you@example.com","password":"<password>"}' \
+  | python -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
+
 curl -X POST http://localhost:8000/api/v1/analyze \
+  -H "Authorization: Bearer $TOKEN" \
   -F "trainer_video=@backend/test_trainer.mp4" \
   -F "user_video=@backend/test_user.mp4" \
   -F "exercise_name=Squat" \
-  -F "email=test@example.com"
-```
+  -F "email=you@example.com"
 
-You'll get back a `task_id`. Poll for status:
-
-```bash
-curl http://localhost:8000/api/v1/analyze/{task_id}/status
+# use the task_id from the response:
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/api/v1/analyze/{task_id}/status
 ```
 
 ---
 
-## What's Left (Optional)
+## What's Left
 
-1. **Real trained form scorer** - The shipped `form_scorer.onnx` was trained on 156 generic
-   `col_*` features that don't match the runtime's 273-feature layout
-   (`backend/app/services/form_scorer.py:prepare_features`). The pipeline detects the mismatch and
-   falls back to landmark-distance scoring + the rule-based biomechanical analyzer, so analysis works
-   end-to-end today. Retrain the scorer on the exact feature contract `prepare_features()` builds to use ML scoring.
-2. **DWPose model** - Only needed for pose-transfer generation, not core analysis (download via `backend/scripts/download_dwpose.py`)
-3. **CUDA DLLs** - Current fallback to CPU works fine
-4. **Real exercise videos** - Replace test videos with actual workout footage
+1. **Validate on real footage.** The pipeline has only run on synthetic clips (`test_user.mp4` /
+   `test_trainer.mp4` are a moving square, no person). Run
+   `python backend/scripts/verify_pose_decode.py <squat.mp4> --refine` (see README) and tune the
+   thresholds in `backend/app/services/exercise_rules.py`.
+2. **No person detection.** The landmark model runs on the whole frame and always returns a pose,
+   even for an empty scene, so a video without a person is not rejected. Converting the detector
+   stage (`models/task_extract/pose_detector.tflite`) to ONNX would fix this, and would also give a
+   person-centred crop, which the model is more accurate on when the person is small in frame.
+3. **ML form scorer.** The shipped `form_scorer.onnx` is a sample built for 156 generic features,
+   while the runtime builds 273 (normalised landmarks + angle differences + visibility). The pipeline
+   detects the mismatch (one warning) and scores with a scale-invariant landmark-distance fallback
+   plus the rule-based scorer. There is no labelled data in the repo, so retraining on the 273-feature
+   layout is not possible yet.
+4. **DWPose model** - only needed for pose-transfer generation, not core analysis
+   (`backend/scripts/download_dwpose.py`).
+5. **CUDA DLLs** - the current fallback to CPU works fine.
 
 ---
 
