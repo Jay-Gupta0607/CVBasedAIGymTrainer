@@ -63,6 +63,23 @@ SKELETON_CONNECTIONS = [
 ]
 
 
+MODEL_INPUT_SIZE = 256  # the landmark model takes a 256x256 crop
+NUM_BODY_LANDMARKS = 33  # the model emits 39 (33 body + 6 auxiliary); only body is used
+
+# A square region of the frame fed to the model: (center_x, center_y, side) in pixels.
+# It may extend past the frame edges (that area is zero-padded).
+Roi = Tuple[float, float, float]
+
+
+def letterbox_roi(height: int, width: int) -> Roi:
+    """Default ROI: the whole frame, padded to a square."""
+    return width / 2.0, height / 2.0, float(max(height, width))
+
+
+def _sigmoid(x: np.ndarray) -> np.ndarray:
+    return 1.0 / (1.0 + np.exp(-np.clip(x, -50.0, 50.0)))
+
+
 class PoseEstimator:
     """MediaPipe BlazePose estimation using ONNX Runtime."""
 
@@ -114,92 +131,88 @@ class PoseEstimator:
         """Check if pose estimator is initialized and ready without reloading model."""
         return self._initialized and self.session is not None
 
-    def preprocess(self, frame: np.ndarray) -> np.ndarray:
-        """Preprocess frame for pose estimation.
+    def preprocess(self, frame: np.ndarray, roi: Optional[Roi] = None) -> np.ndarray:
+        """Crop `roi` (default: whole frame, letterboxed) to 256x256 for the model.
 
         Args:
             frame: BGR image (H, W, 3) from OpenCV
+            roi: Optional (center_x, center_y, side) square region in pixels
 
         Returns:
-            Preprocessed tensor (1, 256, 256, 3) for MediaPipe (NHWC, [0, 1])
+            Tensor (1, 256, 256, 3): RGB, NHWC, normalised to [0, 1]
         """
-        # MediaPipe BlazePose expects RGB, 256x256, normalized to [0, 1], NHWC
         h, w = frame.shape[:2]
-        size = max(h, w)
+        cx, cy, side = roi if roi is not None else letterbox_roi(h, w)
 
-        # Pad to square
-        padded = np.zeros((size, size, 3), dtype=np.uint8)
-        y_offset = (size - h) // 2
-        x_offset = (size - w) // 2
-        padded[y_offset:y_offset+h, x_offset:x_offset+w] = frame
+        # Affine map: original pixels -> 256x256 crop. Area outside the frame is black,
+        # which reproduces the zero-padding of a letterbox.
+        scale = MODEL_INPUT_SIZE / side
+        matrix = np.array(
+            [
+                [scale, 0.0, -(cx - side / 2.0) * scale],
+                [0.0, scale, -(cy - side / 2.0) * scale],
+            ],
+            dtype=np.float32,
+        )
+        crop = cv2.warpAffine(
+            frame,
+            matrix,
+            (MODEL_INPUT_SIZE, MODEL_INPUT_SIZE),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
 
-        # Resize to 256x256
-        resized = cv2.resize(padded, (256, 256), interpolation=cv2.INTER_LINEAR)
-
-        # BGR to RGB
-        rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-
-        # Normalize to [0, 1] (the landmark model's TFLite input normalization)
-        normalized = (rgb.astype(np.float32) / 255.0)
-
-        # Add batch dimension (keep NHWC layout — the raw .tflite export wants it)
-        return np.expand_dims(normalized, axis=0)
+        rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+        return np.expand_dims(rgb.astype(np.float32) / 255.0, axis=0)
 
     def postprocess(
         self,
         outputs: List[np.ndarray],
         original_shape: Tuple[int, int],
+        roi: Optional[Roi] = None,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Postprocess model outputs.
+        """Map raw model outputs back to original-image coordinates.
+
+        The model's first output is (1, 195) = 39 landmarks x (x, y, z, visibility,
+        presence). x/y/z are in 256x256 crop pixels; visibility/presence are logits.
 
         Args:
-            outputs: Model outputs [landmarks_flat, presence, segmentation, ...]
-                     landmarks_flat: (1, 195) = 39 landmarks × 5 (x,y,z,vis,pres)
-            original_shape: (height, width) of original frame
+            outputs: Model outputs
+            original_shape: (height, width) of the frame that was preprocessed
+            roi: The ROI that was passed to `preprocess` (default: letterbox)
 
         Returns:
-            Tuple of (landmarks_3d, visibility)
-            landmarks_3d: (33, 3) - x, y, z in original image coordinates (first 33 of 39)
-            visibility: (33,) - visibility score for each landmark
+            landmarks_3d: (33, 3) - x, y in original pixels; z in the same pixel scale
+                (so 3D angles do not depend on video resolution). Not clipped to the
+                frame: landmarks the model places off-screen keep their position.
+            visibility: (33,) - probability in [0, 1]
         """
-        # Raw output: (1, 195) = 39 × 5 values
-        landmarks_flat = outputs[0][0]  # (195,)
-        landmarks = landmarks_flat.reshape(39, 5)  # (39, 5): x, y, z, visibility, presence
-
-        # Take only first 33 (body landmarks, skip 6 hand landmarks)
-        landmarks = landmarks[:33]  # (33, 5)
-
         h, w = original_shape
+        cx, cy, side = roi if roi is not None else letterbox_roi(h, w)
 
-        # Extract coordinates (already in absolute pixel coordinates from the model)
-        x = landmarks[:, 0]  # absolute x
-        y = landmarks[:, 1]  # absolute y
-        z = landmarks[:, 2]  # depth
-        visibility = landmarks[:, 3]  # confidence
+        landmarks = outputs[0][0].reshape(-1, 5)[:NUM_BODY_LANDMARKS]
 
-        # Coordinates are in 256x256 space; scale back to original image
-        # The model outputs in the padded 256x256 space
-        size = max(h, w)
-        x_offset = (size - w) / 2
-        y_offset = (size - h) / 2
+        # Inverse of the crop: 256-space -> ROI pixels -> original image pixels
+        to_pixels = side / MODEL_INPUT_SIZE
+        x = cx - side / 2.0 + landmarks[:, 0] * to_pixels
+        y = cy - side / 2.0 + landmarks[:, 1] * to_pixels
+        z = landmarks[:, 2] * to_pixels
+        visibility = _sigmoid(landmarks[:, 3])
 
-        # Remove padding offset and scale to original image
-        x = (x - x_offset) * w / size
-        y = (y - y_offset) * h / size
+        landmarks_3d = np.stack([x, y, z], axis=1).astype(np.float32)
+        return landmarks_3d, visibility.astype(np.float32)
 
-        # Clamp to image bounds
-        x = np.clip(x, 0, w - 1)
-        y = np.clip(y, 0, h - 1)
-
-        landmarks_3d = np.stack([x, y, z], axis=1)
-
-        return landmarks_3d, visibility
-
-    def estimate(self, frame: np.ndarray) -> Tuple[np.ndarray, np.ndarray, Dict]:
+    def estimate(
+        self, frame: np.ndarray, roi: Optional[Roi] = None
+    ) -> Tuple[np.ndarray, np.ndarray, Dict]:
         """Estimate pose from a single frame.
 
         Args:
             frame: BGR image (H, W, 3)
+            roi: Optional square region to run the model on (default: whole frame).
+                The model was trained on person-centred crops, so a tight full-body ROI
+                is more accurate than the whole frame when the person is small.
 
         Returns:
             Tuple of (landmarks_3d, visibility, metadata)
@@ -211,13 +224,13 @@ class PoseEstimator:
             self.initialize()
 
         original_shape = frame.shape[:2]
-        input_tensor = self.preprocess(frame)
+        input_tensor = self.preprocess(frame, roi)
 
         # Run inference
         outputs = self.session.run(self.output_names, {self.input_name: input_tensor})
 
         # Postprocess
-        landmarks_3d, visibility = self.postprocess(outputs, original_shape)
+        landmarks_3d, visibility = self.postprocess(outputs, original_shape, roi)
 
         metadata = {
             "input_shape": input_tensor.shape,
