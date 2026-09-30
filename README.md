@@ -162,6 +162,7 @@ python backend/scripts/convert_lightgbm_to_onnx.py --create_sample --output_dir 
 ### Base URL
 
 - Local: `http://localhost:8000/api/v1`
+- Production: `TBD (Not deployed yet)`
 
 ### Endpoints
 
@@ -220,17 +221,66 @@ curl -X POST http://localhost:8000/api/v1/analyze \
         "error_score": 15.2,
         "feedback": "Good depth! Keep knees tracking over toes.",
         "technical_observation": "Left knee valgus 5°, Right knee neutral",
-        "user_image_key": "s3://bucket/frames/...",
-        "trainer_image_key": "s3://bucket/frames/...",
-        "joint_angles": {"left_knee": 95, "right_knee": 93},
-        "pose_landmarks": [...]
+        "user_image_key": "s3://gym-trainer/frames/user_frame_001.jpg",
+        "trainer_image_key": "s3://gym-trainer/frames/trainer_frame_001.jpg",
+        "joint_angles": {
+          "left_knee": 95,
+          "right_knee": 93,
+          "left_hip": 110,
+          "right_hip": 108,
+          "left_ankle": 85,
+          "right_ankle": 83
+        },
+        "pose_landmarks": [
+          {
+            "id": 0,
+            "name": "nose",
+            "x": 0.48,
+            "y": 0.25,
+            "z": -0.12,
+            "visibility": 0.99
+          },
+          {
+            "id": 23,
+            "name": "left_hip",
+            "x": 0.52,
+            "y": 0.61,
+            "z": -0.08,
+            "visibility": 0.97
+          },
+          {
+            "id": 24,
+            "name": "right_hip",
+            "x": 0.44,
+            "y": 0.61,
+            "z": -0.07,
+            "visibility": 0.98
+          },
+          {
+            "id": 25,
+            "name": "left_knee",
+            "x": 0.54,
+            "y": 0.82,
+            "z": 0.05,
+            "visibility": 0.96
+          },
+          {
+            "id": 26,
+            "name": "right_knee",
+            "x": 0.42,
+            "y": 0.81,
+            "z": 0.04,
+            "visibility": 0.97
+          }
+        ]
       }
     ],
     "reps": 3,
     "feedback_summary": "Overall good form. Minor knee valgus on left side during ascent.",
     "technical_details": [
       "Rep 1: Depth 95°, Tempo 2.1s, Knee valgus L:5° R:2°",
-      "Rep 2: Depth 92°, Tempo 2.3s, Knee valgus L:8° R:3°"
+      "Rep 2: Depth 92°, Tempo 2.3s, Knee valgus L:8° R:3°",
+      "Rep 3: Depth 94°, Tempo 2.2s, Knee valgus L:6° R:2°"
     ]
   }
 }
@@ -278,13 +328,6 @@ python backend/scripts/convert_lightgbm_to_onnx.py --create_sample --output_dir 
 ```
 
 ## Performance Benchmarks
-
-Run benchmarks locally:
-
-```bash
-cd benchmarks
-python benchmark_analysis.py --num_runs 50 --video_path ../sample_video.mp4
-```
 
 ### Target Metrics (on RTX 3080 / Intel i7-12700K)
 
